@@ -2,7 +2,7 @@ DocAtlas Pipeline Overview
 ==========================
 
 1) Discover & validate
-- Scan input folder for supported files (.pdf, .doc, .docx, .pptx, .xlsx)
+- Scan input folder for supported files (.pdf, .doc, .docx, .ppt, .pptx, .xlsx)
 - Skip unsupported types
 
 2) Text extraction

@@ -2,7 +2,7 @@ DocAtlas Feature List
 =====================
 
 Input & Extraction
-- Supports .pdf, .doc, .docx, .pptx, .xlsx
+- Supports .pdf, .doc, .docx, .ppt, .pptx, .xlsx
 - .doc auto-converted to .docx via LibreOffice (if installed)
 - PDF extraction via pdfplumber
 - OCR for PDFs: OCRmyPDF (force OCR) -> Tesseract fallback

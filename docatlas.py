@@ -88,7 +88,7 @@ except Exception:  # pragma: no cover
     tqdm = None
 
 
-SUPPORTED_EXTS = {".pdf", ".doc", ".docx", ".pptx", ".xlsx"}
+SUPPORTED_EXTS = {".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xlsx"}
 INVALID_WIN_CHARS = r'<>:"/\\|?*'
 ILLEGAL_EXCEL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
@@ -591,6 +591,34 @@ def convert_doc_to_docx(path: Path) -> Optional[Path]:
             ]
             subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             candidates = list(out_dir.glob("*.docx"))
+            if not candidates:
+                return None
+            return candidates[0]
+    except Exception as exc:
+        logging.exception("Failed to convert %s: %s", path, exc)
+        return None
+
+
+def convert_ppt_to_pptx(path: Path) -> Optional[Path]:
+    """Convert legacy .ppt to .pptx using LibreOffice (soffice)."""
+    soffice = shutil.which("soffice") or shutil.which("soffice.exe")
+    if not soffice:
+        logging.warning("LibreOffice (soffice) not found; cannot convert %s", path)
+        return None
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            out_dir = Path(tmpdir)
+            cmd = [
+                soffice,
+                "--headless",
+                "--convert-to",
+                "pptx",
+                "--outdir",
+                str(out_dir),
+                str(path),
+            ]
+            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            candidates = list(out_dir.glob("*.pptx"))
             if not candidates:
                 return None
             return candidates[0]
@@ -1465,6 +1493,13 @@ def process_file(path: Path, ocrmypdf_enabled: bool) -> Tuple[str, List[Tuple[st
         return text, [], status
     if ext == ".pptx":
         text = extract_text_pptx(path, ocrmypdf_enabled)
+        status = "ok" if len(text.strip()) >= MIN_EXTRACTED_CHARS else "no_text"
+        return text, [], status
+    if ext == ".ppt":
+        pptx_path = convert_ppt_to_pptx(path)
+        if pptx_path is None:
+            return "", [], "no_text_ppt_convert_failed"
+        text = extract_text_pptx(pptx_path, ocrmypdf_enabled)
         status = "ok" if len(text.strip()) >= MIN_EXTRACTED_CHARS else "no_text"
         return text, [], status
     if ext == ".xlsx":
