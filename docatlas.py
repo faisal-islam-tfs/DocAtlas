@@ -1197,7 +1197,7 @@ def get_embeddings_source_gui() -> Tuple[str, bool]:
         return DEFAULT_EMBEDDINGS_SOURCE, True
     root = tk.Tk()
     root.title("DocAtlas - Embeddings Source")
-    root.geometry("700x380")
+    root.geometry("520x280")
     apply_theme(root)
 
     var = tk.StringVar(value=DEFAULT_EMBEDDINGS_SOURCE)
@@ -1277,7 +1277,7 @@ def get_run_mode_gui() -> Optional[bool]:
         return True
     root = tk.Tk()
     root.title("DocAtlas - Run Mode")
-    root.geometry("560x300")
+    root.geometry("760x320")
     apply_theme(root)
 
     var = tk.StringVar(value="charter")
