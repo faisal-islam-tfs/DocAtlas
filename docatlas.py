@@ -1197,7 +1197,7 @@ def get_embeddings_source_gui() -> Tuple[str, bool]:
         return DEFAULT_EMBEDDINGS_SOURCE, True
     root = tk.Tk()
     root.title("DocAtlas - Embeddings Source")
-    root.geometry("560x300")
+    root.geometry("620x340")
     apply_theme(root)
 
     var = tk.StringVar(value=DEFAULT_EMBEDDINGS_SOURCE)
