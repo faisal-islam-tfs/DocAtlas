@@ -37,18 +37,21 @@ Organization
 - Moves files into category folders
 - Duplicates into <category>_Duplicate
 - Auto-rename if file name conflicts
+- Low/no-text files routed to Unreadable
 
 GUI
 - Folder pickers
 - Application/category dropdown + editor
 - OCR settings
 - Embeddings source + append/overwrite toggle
+- Signal Scan (preview-only; no file moves)
 - Progress bar + ETA
 - Pre-run runtime estimate popup (minutes/hours/days)
 
 CLI
 - Full CLI support for input/output/app/categories
 - --limit and --no-move for estimation runs
+- --signal-scan (preview-only; no file moves)
 - --overwrite-excel or append default
 - --no-resume, --no-ocrmypdf
 - --test-chat, --test-embeddings

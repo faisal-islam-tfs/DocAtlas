@@ -117,6 +117,7 @@ DEFAULT_EMBEDDINGS_SOURCE = "full_text"
 DEFAULT_ESTIMATE_SEC_PER_FILE = 50.0
 DEFAULT_ESTIMATE_SEC_PER_MB = 1.5
 EMBEDDINGS_SOURCE_NONE = "none"
+UNREADABLE_CATEGORY = "Unreadable"
 
 USAGE_LOCK = threading.Lock()
 USAGE: Dict[str, int] = {"chat_in": 0, "chat_out": 0, "embed_in": 0}
@@ -887,6 +888,8 @@ def extract_json(text: str) -> Dict[str, Any]:
 
 def summarize_document(cfg: AzureConfig, text: str, categories: List[str]) -> Dict[str, Any]:
     categories_list = categories + (["Other"] if "Other" not in categories else [])
+    if UNREADABLE_CATEGORY not in categories_list:
+        categories_list.append(UNREADABLE_CATEGORY)
     if len(text) <= MAX_CHARS_PER_CHUNK:
         return summarize_with_model(cfg, text, categories_list)
 
@@ -1189,9 +1192,9 @@ def get_ocrmypdf_gui() -> bool:
     return result[0] if result else True
 
 
-def get_embeddings_source_gui() -> Tuple[str, bool]:
+def get_embeddings_source_gui() -> Tuple[str, bool, bool]:
     if tk is None:
-        return DEFAULT_EMBEDDINGS_SOURCE, True
+        return DEFAULT_EMBEDDINGS_SOURCE, True, False
     root = tk.Tk()
     root.title("DocAtlas - Embeddings Source")
     root.geometry("560x300")
@@ -1199,6 +1202,7 @@ def get_embeddings_source_gui() -> Tuple[str, bool]:
 
     var = tk.StringVar(value=DEFAULT_EMBEDDINGS_SOURCE)
     append_var = tk.BooleanVar(value=True)
+    signal_scan_var = tk.BooleanVar(value=False)
     container = tk.Frame(root, bg=THEME["bg"])
     container.pack(fill=tk.BOTH, expand=True, padx=16, pady=16)
 
@@ -1253,11 +1257,20 @@ def get_embeddings_source_gui() -> Tuple[str, bool]:
         font=FONT_LABEL,
     )
     chk.pack(anchor="w", pady=(8, 4))
+    chk_signal = tk.Checkbutton(
+        container,
+        text="Signal Scan (preview only; do not move files)",
+        variable=signal_scan_var,
+        bg=THEME["bg"],
+        fg=THEME["fg"],
+        font=FONT_LABEL,
+    )
+    chk_signal.pack(anchor="w", pady=(0, 4))
 
-    result: List[Tuple[str, bool]] = []
+    result: List[Tuple[str, bool, bool]] = []
 
     def on_ok() -> None:
-        result.append((var.get(), bool(append_var.get())))
+        result.append((var.get(), bool(append_var.get()), bool(signal_scan_var.get())))
         root.destroy()
 
     btn_frame = tk.Frame(container, bg=THEME["bg"])
@@ -1266,7 +1279,7 @@ def get_embeddings_source_gui() -> Tuple[str, bool]:
         side=tk.RIGHT, padx=8, ipady=4
     )
     root.mainloop()
-    return result[0] if result else (DEFAULT_EMBEDDINGS_SOURCE, True)
+    return result[0] if result else (DEFAULT_EMBEDDINGS_SOURCE, True, False)
 
 
 def edit_applications_gui(config_path: Path, app_config: Dict[str, List[str]], parent: tk.Tk) -> None:
@@ -1917,9 +1930,11 @@ def run_pipeline(
         doc_id = resume_files.get(key, {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
         text = raw_texts.get(doc_id, "")
         cached = resume_files.get(key, {})
+        extraction_status = extraction_statuses.get(doc_id, "no_text")
+        low_text = extraction_status != "ok" or len(text) < MIN_EXTRACTED_CHARS
         if cached.get("doc_summary") and not dry_run:
             summary = cached.get("doc_summary", {})
-        elif dry_run or not text.strip():
+        elif dry_run or not text.strip() or low_text:
             summary = {}
         else:
             try:
@@ -1931,7 +1946,9 @@ def run_pipeline(
                 summary = {}
 
         category = (summary.get("category") or "uncategorized").strip()
-        if category not in categories and category != "Other":
+        if low_text:
+            category = UNREADABLE_CATEGORY
+        if category not in categories and category not in ("Other", UNREADABLE_CATEGORY):
             category = "Other"
 
         tags = summary.get("tags") or []
@@ -1958,7 +1975,7 @@ def run_pipeline(
 
         moved_to = ""
         review_flags = []
-        if extraction_statuses.get(doc_id, "no_text") != "ok":
+        if extraction_status != "ok":
             review_flags.append("low_text")
         if len(text) < MIN_EXTRACTED_CHARS:
             review_flags.append("short_text")
@@ -2367,9 +2384,11 @@ def run_pipeline_parallel(
         doc_id = resume_files.get(key, {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
         text = raw_texts.get(doc_id, "")
         cached = resume_files.get(key, {})
+        extraction_status = extraction_statuses.get(doc_id, "no_text")
+        low_text = extraction_status != "ok" or len(text) < MIN_EXTRACTED_CHARS
         if cached.get("doc_summary") and not dry_run:
             summary = cached.get("doc_summary", {})
-        elif dry_run or not text.strip():
+        elif dry_run or not text.strip() or low_text:
             summary = {}
         else:
             try:
@@ -2404,9 +2423,13 @@ def run_pipeline_parallel(
         doc_id = resume_files.get(key, {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
         summary = summaries.get(doc_id, {})
         text = raw_texts.get(doc_id, "")
+        extraction_status = extraction_statuses.get(doc_id, "no_text")
+        low_text = extraction_status != "ok" or len(text) < MIN_EXTRACTED_CHARS
 
         category = (summary.get("category") or "uncategorized").strip()
-        if category not in categories and category != "Other":
+        if low_text:
+            category = UNREADABLE_CATEGORY
+        if category not in categories and category not in ("Other", UNREADABLE_CATEGORY):
             category = "Other"
 
         tags = summary.get("tags") or []
@@ -2431,7 +2454,7 @@ def run_pipeline_parallel(
         duplicate_group_id = doc_dup_group.get(doc_id, "")
 
         review_flags = []
-        if extraction_statuses.get(doc_id, "no_text") != "ok":
+        if extraction_status != "ok":
             review_flags.append("low_text")
         if len(text) < MIN_EXTRACTED_CHARS:
             review_flags.append("short_text")
@@ -2663,6 +2686,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overwrite-excel", action="store_true", help="Overwrite Excel outputs instead of appending")
     parser.add_argument("--limit", type=int, help="Process only the first N files (for estimation)")
     parser.add_argument("--no-move", action="store_true", help="Do not move files (for estimation)")
+    parser.add_argument("--signal-scan", action="store_true", help="Preview-only mode (no file moves)")
     parser.add_argument("--test-embeddings", action="store_true", help="Test embeddings endpoint and exit")
     parser.add_argument("--test-chat", action="store_true", help="Test chat endpoint and exit")
     return parser.parse_args()
@@ -2721,6 +2745,8 @@ def main() -> int:
             return 1
 
     append_excel = not args.overwrite_excel
+    if args.signal_scan:
+        args.no_move = True
 
     if args.input and args.output and (args.categories or args.app):
         input_dir = Path(args.input)
@@ -2739,7 +2765,9 @@ def main() -> int:
         input_dir, output_dir = pick_directories_gui()
         categories, app_name = get_categories_gui(app_config, config_path)
         ocrmypdf_enabled = get_ocrmypdf_gui()
-        embeddings_source, append_excel = get_embeddings_source_gui()
+        embeddings_source, append_excel, gui_signal_scan = get_embeddings_source_gui()
+        if gui_signal_scan:
+            args.no_move = True
 
     cfg = azure_config_from_env(require_key=(not args.dry_run and not is_gui_flow))
     if not args.dry_run:

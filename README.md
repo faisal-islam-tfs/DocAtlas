@@ -192,6 +192,7 @@ python docatlas.py --config "C:\path\to\applications.json" --input "C:\path\to\d
 - `--overwrite-excel`: overwrite Excel outputs instead of appending (default is append)
 - `--limit N`: process only the first N files (useful for time estimation)
 - `--no-move`: do not move files (useful for estimation runs)
+- `--signal-scan`: preview-only mode (no file moves)
 - `--config`: path to applications config JSON
 - `--app`: application name from config (use instead of `--categories`)
 - `--edit-config`: open the applications config editor
@@ -202,6 +203,7 @@ If you run with `--dry-run`, the API key is not required.
 
 ## Notes
 - Duplicates are detected by SHA-256 hash and embeddings (cosine similarity >= 0.97).
+- Low/no-text files are routed to the `Unreadable` category.
 - Excel outputs are appended by default; use `--overwrite-excel` to rebuild from scratch.
 - If `--limit` is used, DocAtlas logs a rough total-time estimate.
 - Token usage estimates are added to the summary report.

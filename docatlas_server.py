@@ -28,6 +28,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--overwrite-excel", action="store_true", help="Overwrite Excel outputs instead of appending")
     p.add_argument("--limit", type=int, help="Process only the first N files (for estimation)")
     p.add_argument("--no-move", action="store_true", help="Do not move files (for estimation)")
+    p.add_argument("--signal-scan", action="store_true", help="Preview-only mode (no file moves)")
     return p.parse_args()
 
 
@@ -46,6 +47,7 @@ def main() -> int:
         raise ValueError("Provide --categories or a valid --app from config")
 
     embeddings_source = "summary" if args.embeddings_source is None else args.embeddings_source
+    no_move = args.no_move or args.signal_scan
 
     cfg = azure_config_from_env(require_key=not args.dry_run)
     if not args.dry_run:
@@ -68,7 +70,7 @@ def main() -> int:
         not args.overwrite_excel,
         args.workers,
         args.limit,
-        args.no_move,
+        no_move,
     )
     return 0
 

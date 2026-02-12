@@ -46,6 +46,7 @@ DocAtlas Pipeline Overview
 7) File organization
 - Move files into category folders
 - Duplicates go to <category>_Duplicate
+- Low/no-text files go to Unreadable
 
 Potential cost/time points
 ==========================

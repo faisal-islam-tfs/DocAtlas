@@ -6,6 +6,7 @@ __pycache__/
 *.log
 *.tmp
 *.bak
+.ssh/
 
 # Outputs
 docatlas.log
@@ -21,4 +22,3 @@ last_run_stats.json
 dist/
 build/
 docatlas.spec
-
