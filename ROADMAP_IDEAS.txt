@@ -1,0 +1,6 @@
+DocAtlas Roadmap Ideas
+======================
+
+- Add a "simple mode" that skips content analysis and sorts files using only
+  filename and file type (extension).
+
