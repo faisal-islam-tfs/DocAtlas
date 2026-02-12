@@ -192,7 +192,7 @@ python docatlas.py --config "C:\path\to\applications.json" --input "C:\path\to\d
 - `--overwrite-excel`: overwrite Excel outputs instead of appending (default is append)
 - `--limit N`: process only the first N files (useful for time estimation)
 - `--no-move`: do not move files (useful for estimation runs)
-- `--signal-scan`: preview-only mode (no file moves)
+- `--charter-mode`: preview-only mode (no file moves)
 - `--config`: path to applications config JSON
 - `--app`: application name from config (use instead of `--categories`)
 - `--edit-config`: open the applications config editor

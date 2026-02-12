@@ -1202,7 +1202,7 @@ def get_embeddings_source_gui() -> Tuple[str, bool, bool]:
 
     var = tk.StringVar(value=DEFAULT_EMBEDDINGS_SOURCE)
     append_var = tk.BooleanVar(value=True)
-    signal_scan_var = tk.BooleanVar(value=False)
+    charter_mode_var = tk.BooleanVar(value=False)
     container = tk.Frame(root, bg=THEME["bg"])
     container.pack(fill=tk.BOTH, expand=True, padx=16, pady=16)
 
@@ -1257,20 +1257,20 @@ def get_embeddings_source_gui() -> Tuple[str, bool, bool]:
         font=FONT_LABEL,
     )
     chk.pack(anchor="w", pady=(8, 4))
-    chk_signal = tk.Checkbutton(
+    chk_charter = tk.Checkbutton(
         container,
-        text="Signal Scan (preview only; do not move files)",
-        variable=signal_scan_var,
+        text="Charter Mode (preview only; do not move files)",
+        variable=charter_mode_var,
         bg=THEME["bg"],
         fg=THEME["fg"],
         font=FONT_LABEL,
     )
-    chk_signal.pack(anchor="w", pady=(0, 4))
+    chk_charter.pack(anchor="w", pady=(0, 4))
 
     result: List[Tuple[str, bool, bool]] = []
 
     def on_ok() -> None:
-        result.append((var.get(), bool(append_var.get()), bool(signal_scan_var.get())))
+        result.append((var.get(), bool(append_var.get()), bool(charter_mode_var.get())))
         root.destroy()
 
     btn_frame = tk.Frame(container, bg=THEME["bg"])
@@ -2686,7 +2686,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overwrite-excel", action="store_true", help="Overwrite Excel outputs instead of appending")
     parser.add_argument("--limit", type=int, help="Process only the first N files (for estimation)")
     parser.add_argument("--no-move", action="store_true", help="Do not move files (for estimation)")
-    parser.add_argument("--signal-scan", action="store_true", help="Preview-only mode (no file moves)")
+    parser.add_argument("--charter-mode", action="store_true", help="Preview-only mode (no file moves)")
+    parser.add_argument("--signal-scan", action="store_true", help="Deprecated alias for --charter-mode")
     parser.add_argument("--test-embeddings", action="store_true", help="Test embeddings endpoint and exit")
     parser.add_argument("--test-chat", action="store_true", help="Test chat endpoint and exit")
     return parser.parse_args()
@@ -2745,7 +2746,7 @@ def main() -> int:
             return 1
 
     append_excel = not args.overwrite_excel
-    if args.signal_scan:
+    if args.charter_mode or args.signal_scan:
         args.no_move = True
 
     if args.input and args.output and (args.categories or args.app):
@@ -2765,8 +2766,8 @@ def main() -> int:
         input_dir, output_dir = pick_directories_gui()
         categories, app_name = get_categories_gui(app_config, config_path)
         ocrmypdf_enabled = get_ocrmypdf_gui()
-        embeddings_source, append_excel, gui_signal_scan = get_embeddings_source_gui()
-        if gui_signal_scan:
+        embeddings_source, append_excel, gui_charter_mode = get_embeddings_source_gui()
+        if gui_charter_mode:
             args.no_move = True
 
     cfg = azure_config_from_env(require_key=(not args.dry_run and not is_gui_flow))
