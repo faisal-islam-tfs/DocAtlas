@@ -188,6 +188,7 @@ python docatlas.py --config "C:\path\to\applications.json" --input "C:\path\to\d
 - `--dry-run`: do not call APIs or move files (hash-based duplicates only)
 - `--no-resume`: disable resume cache
 - `--no-ocrmypdf`: disable OCRmyPDF and use Tesseract fallback
+- `--workers N`: run CLI processing in parallel with N workers (default: `1`; GUI path remains single-worker)
 - `--embeddings-source summary|full_text|none`: choose embeddings input (default: `full_text`)
 - `--overwrite-excel`: overwrite Excel outputs instead of appending (default is append)
 - `--limit N`: process only the first N files (useful for time estimation)
@@ -200,6 +201,12 @@ python docatlas.py --config "C:\path\to\applications.json" --input "C:\path\to\d
 - `--test-chat`: test chat endpoint/key and exit
 
 If you run with `--dry-run`, the API key is not required.
+
+Parallel example:
+
+```bash
+python docatlas.py --input "C:\path\to\docs" --output "C:\path\to\out" --app "Sequencing" --workers 4
+```
 
 ## Notes
 - Duplicates are detected by SHA-256 hash and embeddings (cosine similarity >= 0.97).

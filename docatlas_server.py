@@ -8,6 +8,7 @@ from pathlib import Path
 from docatlas import (
     azure_config_from_env,
     load_app_config,
+    resolve_embeddings_source,
     run_pipeline_parallel,
     warn_missing_ocr_deps,
 )
@@ -47,7 +48,7 @@ def main() -> int:
     else:
         raise ValueError("Provide --categories or a valid --app from config")
 
-    embeddings_source = "summary" if args.embeddings_source is None else args.embeddings_source
+    embeddings_source = resolve_embeddings_source(args.embeddings_source)
     no_move = args.no_move or args.charter_mode or args.signal_scan
 
     cfg = azure_config_from_env(require_key=not args.dry_run)

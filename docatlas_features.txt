@@ -50,6 +50,7 @@ GUI
 
 CLI
 - Full CLI support for input/output/app/categories
+- --workers N for parallel CLI processing (default 1)
 - --limit and --no-move for estimation runs
 - --charter-mode (preview-only; no file moves)
 - --overwrite-excel or append default

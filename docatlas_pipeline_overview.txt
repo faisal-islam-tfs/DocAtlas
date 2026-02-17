@@ -4,6 +4,7 @@ DocAtlas Pipeline Overview
 1) Discover & validate
 - Scan input folder for supported files (.pdf, .doc, .docx, .ppt, .pptx, .xlsx)
 - Skip unsupported types
+- CLI can run with parallel workers (`--workers N`); GUI runs the progress-callback path
 
 2) Text extraction
 - .docx -> python-docx
