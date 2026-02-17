@@ -1,4 +1,4 @@
-DocAtlas Pipeline Overview
+﻿DocAtlas Pipeline Overview
 ==========================
 
 1) Discover & validate
@@ -24,12 +24,12 @@ DocAtlas Pipeline Overview
 
 4) Summarization + classification
 - Per document:
-  - Short summary (1–2 sentences)
-  - Long summary (5–7 sentences)
+  - Short summary (1â€“2 sentences)
+  - Long summary (5â€“7 sentences)
   - Category (from your list)
   - Tags
 - Per PDF article:
-  - Article summary (4–5 sentences, content-first)
+  - Article summary (4â€“5 sentences, content-first)
   - LLM is used here (summaries, category, tags, article summaries)
 
 5) Duplicate detection
@@ -39,14 +39,18 @@ DocAtlas Pipeline Overview
   - Embeddings API is used here (only if embeddings are enabled)
 
 6) Outputs
-- *_docatlas_summaries.xlsx (summaries + tags + duplicates + file paths)
+- *_docatlas_summaries.xlsx
+  - Documents sheet (compact per-document review fields)
+  - Duplicates sheet (duplicate-cluster candidates sorted for triage)
+  - Articles sheet (human-readable article summaries with parent document linkage)
 - *_docatlas_full_text.xlsx (full extracted text + metadata)
 - summary_report.txt (counts, extraction status, token estimates, no-text list, file type breakdown, category %s, OCR usage, duplicate group stats, doc length stats, per-file errors)
+- duplicate_groups_overview.xlsx in each <category>_Duplicate folder (manual cluster assignment/review)
 - Optional: resume.json + last_run_stats.json
 
 7) File organization
 - Move files into category folders
-- Duplicates go to <category>_Duplicate
+- Duplicate clusters go to <category>_Duplicate/<DuplicateClusterID> (canonical + duplicate members together for review)
 - Low/no-text files go to Unreadable
 
 Potential cost/time points
@@ -57,3 +61,4 @@ Potential cost/time points
 - PDFs with many pages increase OCR time and token usage.
 - Large documents increase summarization time and LLM tokens.
 - Optional API delay (DOCATLAS_API_DELAY, seconds) can reduce transient socket errors on Windows.
+

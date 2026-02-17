@@ -1,4 +1,4 @@
-DocAtlas Feature List
+﻿DocAtlas Feature List
 =====================
 
 Input & Extraction
@@ -11,8 +11,8 @@ Input & Extraction
 - Extracts PowerPoint slide text
 
 Summarization & Classification (LLM)
-- Short summary (1–2 sentences)
-- Long summary (5–7 sentences)
+- Short summary (1â€“2 sentences)
+- Long summary (5â€“7 sentences)
 - Category assignment from your list
 - Tag generation (deduped + capped)
 - Article summaries for PDFs
@@ -28,14 +28,18 @@ Duplicate Detection
 
 Outputs
 - *_docatlas_summaries.xlsx
+  - Documents (compact per-document review)
+  - Duplicates (cluster-focused duplicate review)
+  - Articles (human-readable per-article summaries)
 - *_docatlas_full_text.xlsx
 - summary_report.txt
+- duplicate_groups_overview.xlsx inside each <category>_Duplicate folder
 - resume.json (cache)
 - last_run_stats.json (baseline for estimates)
 
 Organization
 - Moves files into category folders
-- Duplicates into <category>_Duplicate
+- Duplicate clusters into <category>_Duplicate/<DuplicateClusterID> (includes canonical + duplicate members)
 - Auto-rename if file name conflicts
 - Low/no-text files routed to Unreadable
 
@@ -74,3 +78,4 @@ Hidden/Internal Features
 - Short-text guard skips embeddings for tiny inputs
 - OCR logs note when OCR is triggered
 - File key based on path + mtime + size to detect changes
+

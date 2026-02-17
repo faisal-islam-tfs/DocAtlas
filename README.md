@@ -1,5 +1,5 @@
-# DocAtlas
-— DocAtlas —
+﻿# DocAtlas
+â€” DocAtlas â€”
 
 DocAtlas is a CLI + GUI tool to extract content from PDFs/DOC/DOCX/PPT/PPTX/XLSX, summarize, categorize, tag, detect duplicates, and organize files into category folders.
 
@@ -36,12 +36,20 @@ Notes:
 
 ## What It Produces
 - `{application}__docatlas_summaries.xlsx` (falls back to `uncategorized__docatlas_summaries.xlsx`)
-  - `Documents` sheet: summaries, categories, tags, duplicate flags
-  - `Articles` sheet: per-article summaries (PDF only)
+  - `Documents` sheet (compact, one row per document):
+    - `Category`, `FilePath`, `FileName`, `DuplicateOf`, `DupScore`,
+      `LongSummary`, `ShortSummary`, `ReviewFlag`, `ExtractionStatus`,
+      `DuplicateClusterID`
+  - `Duplicates` sheet:
+    - duplicate-cluster members only, sorted by category/cluster/score
+  - `Articles` sheet:
+    - human-readable PDF article summaries with parent doc linkage
 - `{application}__docatlas_full_text.xlsx` (falls back to `uncategorized__docatlas_full_text.xlsx`)
   - `FullText` sheet: metadata + full extracted text
 - `summary_report.txt`
   - counts by category, duplicates, extraction status
+- In each `<category>_Duplicate` folder:
+  - `duplicate_groups_overview.xlsx` (group-review tracker with `Group ID`, `FileName`, `Dupli_sc`, `Assigned to`)
 
 ## Requirements
 Install dependencies:
@@ -214,9 +222,10 @@ python docatlas.py --input "C:\path\to\docs" --output "C:\path\to\out" --app "Se
 - Excel outputs are appended by default; use `--overwrite-excel` to rebuild from scratch.
 - If `--limit` is used, DocAtlas logs a rough total-time estimate.
 - Token usage estimates are added to the summary report.
-- In the GUI, you can toggle append vs overwrite in the “Embeddings Source” step.
+- In the GUI, you can toggle append vs overwrite in the "Embeddings Source" step.
 - Embeddings can be computed from the **full text** (default, stricter), **long summary** (lower cost), or **disabled** (hash-only duplicates).
-- Duplicate files are moved to `<category>_Duplicate`.
+- Duplicate clusters are moved to `<category>_Duplicate/<DuplicateClusterID>/` (including canonical + duplicate members).
+- Each `<category>_Duplicate` folder also gets `duplicate_groups_overview.xlsx` for manual assignment/review.
 - PDF article splitting uses a heading-based heuristic.
 - Resume cache stored as `resume.json` in the output folder.
 - OCR fallback for PDFs: OCRmyPDF is used by default if extracted text is too short, then Tesseract OCR as a fallback.
@@ -255,3 +264,4 @@ The tool will warn at startup if OCR dependencies are missing.
 Excel cells have a 32,767 character limit. Full text is split across columns:
 - `full_text_part_1`, `full_text_part_2`, ...
 - `full_text` contains the first part for quick viewing.
+

@@ -1896,6 +1896,69 @@ def write_summary_report(
     return report_path
 
 
+def write_duplicate_group_overviews(output_dir: Path, docs: List[DocRecord]) -> None:
+    """Write one duplicate-group overview workbook per <Category>_Duplicate folder."""
+    by_root: Dict[Path, Dict[str, List[Tuple[str, float]]]] = {}
+    for d in docs:
+        if not (d.duplicate_group_id or d.duplicate_of):
+            continue
+        cat_folder = sanitize_folder(d.category)
+        cluster_id = sanitize_folder(d.duplicate_group_id or f"OF_{d.duplicate_of or 'UNCLUSTERED'}")
+        dup_root = output_dir / f"{cat_folder}_Duplicate"
+        file_name = Path(d.moved_to).name if d.moved_to else d.file_name
+        score = float(d.duplicate_score) if d.duplicate_score is not None else 0.0
+        by_root.setdefault(dup_root, {}).setdefault(cluster_id, []).append((file_name, score))
+
+    for dup_root, clusters in by_root.items():
+        if not dup_root.exists():
+            continue
+        rows: List[Dict[str, Any]] = []
+        for cluster_id in sorted(clusters.keys()):
+            rows.append(
+                {
+                    "Group ID": f"Duplicate Group {cluster_id} - Assigned to:",
+                    "FileName": "",
+                    "Dupli_sc": "",
+                    "Assigned to": "",
+                }
+            )
+            members = sorted(clusters[cluster_id], key=lambda x: (-x[1], x[0].lower()))
+            for file_name, score in members:
+                rows.append(
+                    {
+                        "Group ID": cluster_id,
+                        "FileName": file_name,
+                        "Dupli_sc": score,
+                        "Assigned to": "",
+                    }
+                )
+
+        df = sanitize_excel_df(pd.DataFrame(rows, columns=["Group ID", "FileName", "Dupli_sc", "Assigned to"]))
+        out_path = dup_root / "duplicate_groups_overview.xlsx"
+        with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+            df.to_excel(writer, index=False, sheet_name="Groups")
+
+        try:
+            from openpyxl import load_workbook
+            from openpyxl.styles import Alignment, Font
+
+            wb = load_workbook(out_path)
+            ws = wb["Groups"]
+            wrap = Alignment(wrap_text=True, vertical="top")
+            bold = Font(bold=True)
+            for col in ("A", "B", "C", "D"):
+                ws.column_dimensions[col].width = 36 if col == "A" else 28
+            for row in range(2, ws.max_row + 1):
+                cell = ws.cell(row=row, column=1)
+                if str(cell.value or "").startswith("Duplicate Group "):
+                    cell.font = bold
+                for col in range(1, 5):
+                    ws.cell(row=row, column=col).alignment = wrap
+            wb.save(out_path)
+        except Exception:
+            pass
+
+
 def prompt_api_key_gui(title: str, label_text: str) -> Optional[str]:
     if tk is None:
         return None
@@ -2328,6 +2391,11 @@ def run_pipeline(
                 errors.append({"stage": "move", "file_name": src.name, "file_path": str(src), "error": str(exc)})
             if progress_cb:
                 progress_cb("Moving files", i, len(docs))
+        try:
+            write_duplicate_group_overviews(output_dir, docs)
+        except Exception as exc:
+            logging.exception("Failed to write duplicate group overviews: %s", exc)
+            errors.append({"stage": "write_duplicate_overview", "file_name": "", "file_path": str(output_dir), "error": str(exc)})
 
     full_text_rows: List[Dict[str, Any]] = []
     for d in docs:
@@ -2789,6 +2857,12 @@ def run_pipeline_parallel(
                 logging.exception("Failed to move %s: %s", src, exc)
                 with errors_lock:
                     errors.append({"stage": "move", "file_name": src.name, "file_path": str(src), "error": str(exc)})
+        try:
+            write_duplicate_group_overviews(output_dir, docs)
+        except Exception as exc:
+            logging.exception("Failed to write duplicate group overviews: %s", exc)
+            with errors_lock:
+                errors.append({"stage": "write_duplicate_overview", "file_name": "", "file_path": str(output_dir), "error": str(exc)})
 
     full_text_rows: List[Dict[str, Any]] = []
     for d in docs:

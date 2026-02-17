@@ -1,4 +1,4 @@
-DocAtlas Outputs Guide (All Modes)
+﻿DocAtlas Outputs Guide (All Modes)
 ==================================
 
 This file summarizes what DocAtlas produces in each run mode, and shows
@@ -9,16 +9,22 @@ Core Outputs (Normal Processing Runs)
 DocAtlas writes these files into the selected output folder:
 
 1) <app_or_uncategorized>__docatlas_summaries.xlsx
-   - Sheet: Documents
-     Columns include:
-       doc_id, file_key, category, tags, short_summary, long_summary,
-       word_count, char_count, extraction_status, review_flags,
-       duplicate_of, duplicate_score, duplicate_group_id,
-       moved_to, file_name, file_path
-   - Sheet: Articles
-     Columns include:
-       doc_id, file_key, article_index, article_title, article_summary,
-       duplicate_of, duplicate_score, duplicate_group_id, file_name, file_path
+   - Sheet: Documents (one row per document, compact review view)
+     Columns:
+       Category, FilePath, FileName, DuplicateOf, DupScore,
+       LongSummary, ShortSummary, ReviewFlag, ExtractionStatus,
+       DuplicateClusterID
+   - Sheet: Duplicates (duplicate-review view)
+     - Includes only rows that belong to duplicate clusters
+     - Sorted by Category, then DuplicateClusterID, then DupScore descending
+     Columns:
+       DuplicateClusterID, Category, FilePath, FileName,
+       DupScore, DuplicateOf, ReviewFlag
+   - Sheet: Articles (human-readable article review view)
+     - Includes PDF article summaries with parent doc linkage
+     Columns:
+       Category, FilePath, FileName, ParentDocID, ArticleIndex,
+       ArticleTitle, ArticleSummary, DuplicateClusterID, DupScore, DuplicateOf
 
 2) <app_or_uncategorized>__docatlas_full_text.xlsx
    - Sheet: FullText
@@ -48,7 +54,8 @@ File-Move Side Effects
 ----------------------
 If moves are enabled (default), input files are moved into:
 - <category>\ for non-duplicates
-- <category>_Duplicate\ for duplicates
+- <category>_Duplicate\<DuplicateClusterID>\ for duplicate clusters
+  (canonical + duplicate members are moved together)
 
 Low/no-text files are forced into category "Unreadable".
 
@@ -59,7 +66,7 @@ Mode-by-Mode Output Behavior
 1) GUI Normal Run (Atlas mode)
 ------------------------------
 Produces all core output files above.
-Moves files by category/duplicate rules.
+Moves files by category/duplicate-cluster rules.
 Shows a progress window with stage + ETA while running.
 
 Sample output tree:
@@ -72,10 +79,11 @@ output/
   Sequencing__docatlas_full_text.xlsx
   summary_report.txt
   Sequencing/
-    report_A.pdf
     notes_B.docx
   Sequencing_Duplicate/
-    report_A_copy.pdf
+    DUP-0001/
+      report_A.pdf
+      report_A_copy.pdf
   Unreadable/
     bad_scan_01.pdf
 
@@ -117,9 +125,10 @@ output/
   summary_report.txt
   Finance/
     invoice_2025.xlsx
-    policy.docx
   Finance_Duplicate/
-    policy_copy.docx
+    DUP-0003/
+      policy.docx
+      policy_copy.docx
   Unreadable/
     scan_without_text.pdf
 
@@ -215,11 +224,10 @@ output/
   qPCR__docatlas_summaries.xlsx
   qPCR__docatlas_full_text.xlsx
   summary_report.txt
-  qPCR/
-    run_001.pdf
-    run_002.pdf
   qPCR_Duplicate/
-    run_001_copy.pdf
+    DUP-0007/
+      run_001.pdf
+      run_001_copy.pdf
 
 
 Behavior Differences by Key Flags
