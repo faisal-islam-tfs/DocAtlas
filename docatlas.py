@@ -1697,6 +1697,13 @@ def write_excels(
         dups_df = pd.concat([existing_dups_df, dups_df], ignore_index=True)
     if append_excel and existing_articles_df is not None:
         articles_df = pd.concat([existing_articles_df, articles_df], ignore_index=True)
+    if not dups_df.empty:
+        if "DupScore" in dups_df.columns:
+            dups_df["DupScore"] = pd.to_numeric(dups_df["DupScore"], errors="coerce").fillna(0.0)
+        sort_cols = [c for c in ["Category", "DuplicateClusterID", "DupScore"] if c in dups_df.columns]
+        if sort_cols:
+            ascending = [True if c != "DupScore" else False for c in sort_cols]
+            dups_df = dups_df.sort_values(sort_cols, ascending=ascending, kind="mergesort", na_position="last").reset_index(drop=True)
 
     with pd.ExcelWriter(peers_path, engine="openpyxl") as writer:
         docs_df.to_excel(writer, index=False, sheet_name="Documents")
@@ -1912,6 +1919,22 @@ def write_duplicate_group_overviews(output_dir: Path, docs: List[DocRecord]) -> 
     for dup_root, clusters in by_root.items():
         if not dup_root.exists():
             continue
+        out_path = dup_root / "duplicate_groups_overview.xlsx"
+        existing_assignments: Dict[Tuple[str, str], str] = {}
+        if out_path.exists():
+            try:
+                prev_df = pd.read_excel(out_path, sheet_name="Groups")
+                for _, row in prev_df.iterrows():
+                    gid = str(row.get("Group ID", "") or "").strip()
+                    fname = str(row.get("FileName", "") or "").strip()
+                    assignee = str(row.get("Assigned to", "") or "").strip()
+                    if not gid or not fname or not assignee:
+                        continue
+                    if gid.startswith("Duplicate Group "):
+                        continue
+                    existing_assignments[(gid, fname.lower())] = assignee
+            except Exception:
+                existing_assignments = {}
         rows: List[Dict[str, Any]] = []
         for cluster_id in sorted(clusters.keys()):
             rows.append(
@@ -1924,17 +1947,17 @@ def write_duplicate_group_overviews(output_dir: Path, docs: List[DocRecord]) -> 
             )
             members = sorted(clusters[cluster_id], key=lambda x: (-x[1], x[0].lower()))
             for file_name, score in members:
+                assigned_to = existing_assignments.get((cluster_id, file_name.lower()), "")
                 rows.append(
                     {
                         "Group ID": cluster_id,
                         "FileName": file_name,
                         "Dupli_sc": score,
-                        "Assigned to": "",
+                        "Assigned to": assigned_to,
                     }
                 )
 
         df = sanitize_excel_df(pd.DataFrame(rows, columns=["Group ID", "FileName", "Dupli_sc", "Assigned to"]))
-        out_path = dup_root / "duplicate_groups_overview.xlsx"
         with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="Groups")
 
@@ -2361,9 +2384,9 @@ def run_pipeline(
 
     # Move files
     if not dry_run and not no_move:
-        for i, d in enumerate(docs, start=1):
+        for move_idx, d in enumerate(docs, start=1):
             if progress_cb:
-                progress_cb("Moving files", i - 1, len(docs))
+                progress_cb("Moving files", move_idx - 1, len(docs))
             src = Path(d.file_path)
             cat_folder = sanitize_folder(d.category)
             if d.duplicate_group_id or d.duplicate_of:
@@ -2376,13 +2399,13 @@ def run_pipeline(
             if target.exists():
                 stem = target.stem
                 suffix = target.suffix
-                i = 1
+                suffix_idx = 1
                 while True:
-                    candidate = dest_dir / f"{stem}_{i}{suffix}"
+                    candidate = dest_dir / f"{stem}_{suffix_idx}{suffix}"
                     if not candidate.exists():
                         target = candidate
                         break
-                    i += 1
+                    suffix_idx += 1
             try:
                 shutil.move(str(src), str(target))
                 d.moved_to = str(target)
@@ -2390,7 +2413,7 @@ def run_pipeline(
                 logging.exception("Failed to move %s: %s", src, exc)
                 errors.append({"stage": "move", "file_name": src.name, "file_path": str(src), "error": str(exc)})
             if progress_cb:
-                progress_cb("Moving files", i, len(docs))
+                progress_cb("Moving files", move_idx, len(docs))
         try:
             write_duplicate_group_overviews(output_dir, docs)
         except Exception as exc:
@@ -2516,15 +2539,17 @@ def run_pipeline_parallel(
     article_id_to_idx: Dict[str, int] = {}
     errors: List[Dict[str, str]] = []
     errors_lock = threading.Lock()
+    state_lock = threading.Lock()
 
     def extract_and_embed(idx_path: Tuple[int, Path]) -> Tuple[int, Path, str, List[Tuple[str, str]], str, Optional[np.ndarray], List[Tuple[str, Optional[np.ndarray]]]]:
         idx, path = idx_path
         key = file_key(path)
-        cached = resume_files.get(key)
-        doc_id = f"{run_id}-DOC-{idx:05d}"
-        if cached and cached.get("doc_id"):
-            doc_id = cached["doc_id"]
-        doc_id_to_key[doc_id] = key
+        with state_lock:
+            cached = resume_files.get(key)
+            doc_id = f"{run_id}-DOC-{idx:05d}"
+            if cached and cached.get("doc_id"):
+                doc_id = cached["doc_id"]
+            doc_id_to_key[doc_id] = key
         if cached:
             text = cached.get("text", "")
             pdf_articles = cached.get("articles_raw", [])
@@ -2540,15 +2565,16 @@ def run_pipeline_parallel(
                 text = ""
                 pdf_articles = []
                 extraction_status = "no_text"
-            resume_files[key] = {
-                "doc_id": doc_id,
-                "file_path": str(path),
-                "file_name": path.name,
-                "ext": path.suffix.lower(),
-                "text": text,
-                "articles_raw": pdf_articles,
-                "extraction_status": extraction_status,
-            }
+            with state_lock:
+                resume_files[key] = {
+                    "doc_id": doc_id,
+                    "file_path": str(path),
+                    "file_name": path.name,
+                    "ext": path.suffix.lower(),
+                    "text": text,
+                    "articles_raw": pdf_articles,
+                    "extraction_status": extraction_status,
+                }
 
         normalized = normalize_text(text)
         hsh = hash_text(normalized)
@@ -2562,16 +2588,14 @@ def run_pipeline_parallel(
                 try:
                     emb = call_azure_embeddings(cfg, normalized[:MAX_CHARS_PER_CHUNK])
                     emb_vec = np.array(emb, dtype=np.float32)
-                    resume_files[key]["doc_embedding"] = emb
+                    with state_lock:
+                        resume_files[key]["doc_embedding"] = emb
                 except Exception as exc:
                     logging.exception("Embedding failed for %s: %s", path, exc)
 
         art_embs: List[Tuple[str, Optional[np.ndarray]]] = []
         for a_idx, (_title, body) in enumerate(pdf_articles, start=1):
             article_id = f"{doc_id}-A{a_idx:03d}"
-            article_texts[article_id] = body
-            article_id_to_key[article_id] = key
-            article_id_to_idx[article_id] = a_idx
             aemb_vec: Optional[np.ndarray] = None
             if embeddings_source == "full_text":
                 cached_aemb = None
@@ -2583,7 +2607,8 @@ def run_pipeline_parallel(
                     try:
                         aemb = call_azure_embeddings(cfg, body[:MAX_CHARS_PER_CHUNK])
                         aemb_vec = np.array(aemb, dtype=np.float32)
-                        resume_files[key].setdefault("article_embeddings", {})[str(a_idx)] = aemb
+                        with state_lock:
+                            resume_files[key].setdefault("article_embeddings", {})[str(a_idx)] = aemb
                     except Exception as exc:
                         logging.exception("Article embedding failed for %s: %s", path, exc)
                         with errors_lock:
@@ -2591,8 +2616,9 @@ def run_pipeline_parallel(
             art_embs.append((article_id, aemb_vec))
 
         if use_resume:
-            resume["files"] = resume_files
-            save_resume(output_dir, resume)
+            with state_lock:
+                resume["files"] = resume_files
+                save_resume(output_dir, resume)
 
         return idx, path, text, pdf_articles, extraction_status, (hsh, emb_vec), art_embs
 
@@ -2606,14 +2632,19 @@ def run_pipeline_parallel(
                 with errors_lock:
                     errors.append({"stage": "worker", "file_name": "", "file_path": "", "error": str(exc)})
                 continue
-            doc_id = resume_files.get(file_key(path), {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
+            with state_lock:
+                doc_id = resume_files.get(file_key(path), {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
             raw_texts[doc_id] = text
             extraction_statuses[doc_id] = extraction_status
             hsh, emb_vec = doc_hash_emb
             doc_hashes[doc_id] = hsh
             doc_items.append((doc_id, hsh, emb_vec))
             articles_by_doc[doc_id] = pdf_articles
-            for (article_id, aemb_vec), (title, body) in zip(art_embs, pdf_articles):
+            for a_idx, ((article_id, aemb_vec), (_title, body)) in enumerate(zip(art_embs, pdf_articles), start=1):
+                article_texts[article_id] = body
+                key = file_key(path)
+                article_id_to_key[article_id] = key
+                article_id_to_idx[article_id] = a_idx
                 ahash = hash_text(normalize_text(body))
                 article_hashes[article_id] = ahash
                 article_items.append((article_id, ahash, aemb_vec))
@@ -2634,9 +2665,11 @@ def run_pipeline_parallel(
     def summarize_doc(idx_path: Tuple[int, Path]) -> Tuple[int, Path, Dict[str, Any]]:
         idx, path = idx_path
         key = file_key(path)
-        doc_id = resume_files.get(key, {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
+        with state_lock:
+            doc_id = resume_files.get(key, {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
         text = raw_texts.get(doc_id, "")
-        cached = resume_files.get(key, {})
+        with state_lock:
+            cached = resume_files.get(key, {})
         extraction_status = extraction_statuses.get(doc_id, "no_text")
         low_text = extraction_status != "ok" or len(text) < MIN_EXTRACTED_CHARS
         if cached.get("doc_summary") and not dry_run:
@@ -2646,15 +2679,17 @@ def run_pipeline_parallel(
         else:
             try:
                 summary = summarize_document(cfg, text, categories)
-                resume_files[key]["doc_summary"] = summary
+                with state_lock:
+                    resume_files[key]["doc_summary"] = summary
             except Exception as exc:
                 logging.exception("Summarization failed for %s: %s", path, exc)
                 with errors_lock:
                     errors.append({"stage": "summarize", "file_name": path.name, "file_path": str(path), "error": str(exc)})
                 summary = {}
         if use_resume:
-            resume["files"] = resume_files
-            save_resume(output_dir, resume)
+            with state_lock:
+                resume["files"] = resume_files
+                save_resume(output_dir, resume)
         return idx, path, summary
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
@@ -2668,7 +2703,8 @@ def run_pipeline_parallel(
                 with errors_lock:
                     errors.append({"stage": "summarize_worker", "file_name": "", "file_path": "", "error": str(exc)})
                 continue
-            doc_id = resume_files.get(file_key(path), {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
+            with state_lock:
+                doc_id = resume_files.get(file_key(path), {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
             summaries[doc_id] = summary
 
     for idx, path in enumerate(files, start=1):
