@@ -522,7 +522,8 @@ def sanitize_excel_value(val: Any) -> Any:
 
 def sanitize_excel_df(df: pd.DataFrame) -> pd.DataFrame:
     try:
-        obj_cols = df.select_dtypes(include=["object"]).columns
+        # Include pandas "string" dtype to stay compatible across pandas 2.x/3.x.
+        obj_cols = df.select_dtypes(include=["object", "string"]).columns
         for col in obj_cols:
             df[col] = df[col].apply(sanitize_excel_value)
     except Exception:
@@ -873,14 +874,20 @@ def extract_text_xlsx(path: Path) -> str:
     if openpyxl is None:
         raise RuntimeError("openpyxl is not installed")
     wb = openpyxl.load_workbook(str(path), data_only=True, read_only=True)
-    parts: List[str] = []
-    for ws in wb.worksheets:
-        parts.append(f"[Sheet: {ws.title}]")
-        for row in ws.iter_rows(values_only=True):
-            row_vals = [str(v) for v in row if v not in (None, "")]
-            if row_vals:
-                parts.append("\t".join(row_vals))
-    return "\n".join(parts)
+    try:
+        parts: List[str] = []
+        for ws in wb.worksheets:
+            parts.append(f"[Sheet: {ws.title}]")
+            for row in ws.iter_rows(values_only=True):
+                row_vals = [str(v) for v in row if v not in (None, "")]
+                if row_vals:
+                    parts.append("\t".join(row_vals))
+        return "\n".join(parts)
+    finally:
+        try:
+            wb.close()
+        except Exception:
+            pass
 
 
 def extract_text_pdf(path: Path, ocrmypdf_enabled: bool) -> Tuple[str, List[str], str]:
@@ -3271,7 +3278,6 @@ def main() -> int:
     category_path_map_path = Path(args.category_path_map) if args.category_path_map else Path(__file__).with_name(DEFAULT_CATEGORY_PATH_MAP_FILENAME)
     category_path_map = load_category_path_map(category_path_map_path)
     app_config = load_app_config(config_path)
-    validate_app_and_category_map(app_config, category_path_map)
     is_gui_flow = not (args.input and args.output and (args.categories or args.app))
 
     if args.edit_config:
@@ -3319,6 +3325,8 @@ def main() -> int:
         except Exception as exc:
             print(f"Chat test failed: {exc}")
             return 1
+
+    validate_app_and_category_map(app_config, category_path_map)
 
     append_excel = not args.overwrite_excel
     if args.charter_mode or args.signal_scan:
