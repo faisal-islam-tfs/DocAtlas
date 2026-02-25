@@ -43,7 +43,8 @@
   - Documents sheet (compact per-document review fields)
   - Duplicates sheet (duplicate-cluster candidates sorted for triage)
   - Articles sheet (human-readable article summaries with parent document linkage)
-- *_docatlas_full_text.xlsx (full extracted text + metadata)
+- *_docatlas_import.xlsx (standalone import sheet: Id, Path, Title, Content, Summary, Tags, Attachments, AutoPublish, ArticleType)
+- *_docatlas_full_text.xlsx (disabled by default; opt-in via --include-full-text-output)
 - summary_report.txt (counts, extraction status, token estimates, no-text list, file type breakdown, category %s, OCR usage, duplicate group stats, doc length stats, per-file errors)
 - duplicate_groups_overview.xlsx in each <category>_Duplicate folder (manual cluster assignment/review)
 - Optional: resume.json + last_run_stats.json

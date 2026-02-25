@@ -10,6 +10,7 @@ DocAtlas document processing pipeline:
 from __future__ import annotations
 
 import argparse
+import html
 import io
 import hashlib
 import json
@@ -115,6 +116,8 @@ MAX_TAGS = 10
 RESUME_FILENAME = "resume.json"
 LAST_RUN_STATS_FILENAME = "last_run_stats.json"
 DEFAULT_EMBEDDINGS_SOURCE = "full_text"
+DEFAULT_CATEGORY_PATH_MAP_FILENAME = "category_path_map.json"
+DEFAULT_INCLUDE_FULL_TEXT_OUTPUT = False
 DEFAULT_ESTIMATE_SEC_PER_FILE = 50.0
 DEFAULT_ESTIMATE_SEC_PER_MB = 1.5
 EMBEDDINGS_SOURCE_NONE = "none"
@@ -525,6 +528,210 @@ def sanitize_excel_df(df: pd.DataFrame) -> pd.DataFrame:
     except Exception:
         pass
     return df
+
+
+def load_category_path_map(path: Path) -> Dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        with path.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def validate_app_and_category_map(app_config: Dict[str, List[str]], category_path_map: Dict[str, Any]) -> None:
+    errors: List[str] = []
+
+    app_names = [str(a).strip() for a in app_config.keys() if str(a).strip()]
+    app_names_cf = [a.casefold() for a in app_names]
+    if len(app_names_cf) != len(set(app_names_cf)):
+        errors.append("applications.json has duplicate application names (case-insensitive).")
+
+    for app, cats in app_config.items():
+        if not isinstance(cats, list):
+            errors.append(f"applications.json app '{app}' must map to a list of categories.")
+            continue
+        seen_cf: set[str] = set()
+        for c in cats:
+            cs = str(c).strip()
+            if not cs:
+                errors.append(f"applications.json app '{app}' contains an empty category.")
+                continue
+            ccf = cs.casefold()
+            if ccf in seen_cf:
+                errors.append(f"applications.json app '{app}' has duplicate category '{cs}' (case-insensitive).")
+            seen_cf.add(ccf)
+
+    if not category_path_map:
+        errors.append("category_path_map.json is empty or invalid JSON object.")
+    else:
+        map_apps = [str(a).strip() for a in category_path_map.keys() if str(a).strip()]
+        map_apps_cf = {a.casefold(): a for a in map_apps}
+        app_cfg_cf = {a.casefold(): a for a in app_names}
+
+        for app_cf, app in app_cfg_cf.items():
+            if app_cf not in map_apps_cf:
+                errors.append(f"category_path_map.json missing application key '{app}'.")
+                continue
+            app_map = category_path_map.get(map_apps_cf[app_cf])
+            if not isinstance(app_map, dict):
+                errors.append(f"category_path_map.json application '{app}' must map to an object.")
+                continue
+            cfg_cats = app_config[app]
+            cfg_cats_cf = {str(c).strip().casefold(): str(c).strip() for c in cfg_cats if str(c).strip()}
+            map_cats_cf = {str(k).strip().casefold(): str(k).strip() for k in app_map.keys() if str(k).strip()}
+
+            for cat_cf, cat in cfg_cats_cf.items():
+                if cat_cf not in map_cats_cf:
+                    errors.append(f"category_path_map.json missing category '{cat}' under application '{app}'.")
+                    continue
+                val = app_map.get(map_cats_cf[cat_cf])
+                if not isinstance(val, str) or not val.strip():
+                    errors.append(f"category_path_map.json has empty path for '{app}' -> '{cat}'.")
+
+            extra = sorted(set(map_cats_cf.keys()) - set(cfg_cats_cf.keys()))
+            for e in extra:
+                errors.append(
+                    f"category_path_map.json has extra category '{map_cats_cf[e]}' under application '{app}' not present in applications.json."
+                )
+
+        extra_apps = sorted(set(map_apps_cf.keys()) - set(app_cfg_cf.keys()))
+        for e in extra_apps:
+            errors.append(
+                f"category_path_map.json has extra application '{map_apps_cf[e]}' not present in applications.json."
+            )
+
+    if errors:
+        msg = "Configuration validation failed:\n- " + "\n- ".join(errors)
+        raise ValueError(msg)
+
+
+def resolve_category_path(category_path_map: Dict[str, Any], app_name: Optional[str], category: str) -> str:
+    app_key = (app_name or "uncategorized").strip()
+    cat = (category or "").strip()
+    fallback = f"{app_key}/{cat}" if cat else app_key
+
+    def normalize_with_app_prefix(raw_path: str) -> str:
+        noisy = {"? to", "top level (1)", "mid level (2)", "mid level (3)", "bottom level (4)"}
+        parts = [
+            str(p).strip()
+            for p in str(raw_path).replace("\\", "/").split("/")
+            if str(p).strip() and str(p).strip().casefold() not in noisy
+        ]
+        if not parts:
+            return fallback
+        if parts[0].casefold() == app_key.casefold():
+            parts[0] = app_key
+            return "/".join(parts)
+        return f"{app_key}/{'/'.join(parts)}"
+
+    if not category_path_map:
+        return fallback
+
+    app_map = category_path_map.get(app_key)
+    if isinstance(app_map, dict):
+        val = app_map.get(cat)
+        if isinstance(val, str) and val.strip():
+            return normalize_with_app_prefix(val.strip().strip("/\\"))
+
+    val = category_path_map.get(cat)
+    if isinstance(val, str) and val.strip():
+        return normalize_with_app_prefix(val.strip().strip("/\\"))
+
+    return fallback
+
+
+def stable_import_id(file_path: str, title: str) -> str:
+    base = f"{normalize_text(file_path)}|{normalize_text(title)}"
+    return f"imp_{hashlib.sha1(base.encode('utf-8', errors='ignore')).hexdigest()[:16]}"
+
+
+def text_to_html(text: str) -> str:
+    text = (text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if not text:
+        return "<p></p>"
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
+    html_parts: List[str] = []
+    for p in paragraphs:
+        escaped = html.escape(p, quote=False).replace("\n", "<br>")
+        html_parts.append(f"<p>{escaped}</p>")
+    return "\n".join(html_parts) if html_parts else "<p></p>"
+
+
+def classify_article_type_by_content(short_summary: str, long_summary: str, content_text: str) -> str:
+    text = normalize_text(" ".join([short_summary or "", long_summary or "", content_text or ""]))
+    rules = [
+        (("faq", "frequently asked"), "FAQs"),
+        (("troubleshoot", "error", "issue", "fix"), "Troubleshooting"),
+        (("manual", "guide", "instruction", "procedure"), "Manuals and Guides"),
+        (("reference", "specification", "datasheet"), "References"),
+        (("training", "tutorial", "course", "learn"), "Education & Training"),
+        (("application note", "product note"), "Application and Product Notes"),
+    ]
+    for needles, label in rules:
+        if any(n in text for n in needles):
+            return label
+    return "Documentation"
+
+
+def attachment_path_for_doc(file_name: str, file_path: str) -> str:
+    ext = Path(file_name or file_path or "").suffix.lower().lstrip(".")
+    return f"attachments/{ext or 'file'}"
+
+
+def write_import_excel(
+    out_dir: Path,
+    app_name: Optional[str],
+    import_rows: List[Dict[str, Any]],
+    append_excel: bool,
+) -> Path:
+    app_slug = sanitize_folder(app_name or "uncategorized")
+    import_path = out_dir / f"{app_slug}__docatlas_import.xlsx"
+    columns = ["Id", "Path", "Title", "Content", "Summary", "Tags", "Attachments", "AutoPublish", "ArticleType"]
+    new_df = sanitize_excel_df(pd.DataFrame(import_rows, columns=columns))
+
+    if append_excel and import_path.exists():
+        try:
+            existing_df = pd.read_excel(import_path, sheet_name="import")
+        except Exception:
+            existing_df = pd.DataFrame(columns=columns)
+        existing_df = sanitize_excel_df(existing_df)
+        if "Id" in existing_df.columns and "Id" in new_df.columns:
+            existing_ids = set(existing_df["Id"].astype(str))
+            new_df = new_df[~new_df["Id"].astype(str).isin(existing_ids)]
+        out_df = pd.concat([existing_df, new_df], ignore_index=True)
+    else:
+        out_df = new_df
+
+    with pd.ExcelWriter(import_path, engine="openpyxl") as writer:
+        out_df.to_excel(writer, index=False, sheet_name="import")
+    return import_path
+
+
+def write_full_text_legacy_structure_note(out_dir: Path) -> Path:
+    note_path = out_dir / "full_text_legacy_structure.txt"
+    text = (
+        "Legacy Full Text Workbook Structure\n"
+        "==================================\n\n"
+        "Workbook name pattern:\n"
+        "- <app_slug>__docatlas_full_text.xlsx\n\n"
+        "Sheet:\n"
+        "- FullText\n\n"
+        "Typical columns:\n"
+        "- doc_id, file_key, category, short_summary, long_summary, tags,\n"
+        "  word_count, char_count, extraction_status, review_flags,\n"
+        "  full_text, full_text_parts_count, full_text_part_1..N,\n"
+        "  moved_to, file_name, file_path\n\n"
+        "Purpose:\n"
+        "- Preserve complete extracted document text split into Excel-safe chunks.\n\n"
+        "Status:\n"
+        "- Full-text workbook output is currently disabled by default.\n"
+        "- Re-enable by running with --include-full-text-output.\n"
+    )
+    note_path.write_text(text, encoding="utf-8")
+    return note_path
 
 
 def ocr_image_bytes(image_bytes: bytes) -> str:
@@ -1541,10 +1748,12 @@ def write_excels(
     full_text_rows: List[Dict[str, Any]],
     app_name: Optional[str],
     append_excel: bool,
-) -> Tuple[Path, Path]:
+    category_path_map: Dict[str, Any],
+    include_full_text_output: bool = DEFAULT_INCLUDE_FULL_TEXT_OUTPUT,
+) -> Tuple[Path, Optional[Path], Path]:
     app_slug = sanitize_folder(app_name or "uncategorized")
     peers_path = out_dir / f"{app_slug}__docatlas_summaries.xlsx"
-    full_text_path = out_dir / f"{app_slug}__docatlas_full_text.xlsx"
+    full_text_path = out_dir / f"{app_slug}__docatlas_full_text.xlsx" if include_full_text_output else None
 
     existing_docs_df = None
     existing_dups_df = None
@@ -1575,7 +1784,7 @@ def write_excels(
         except Exception:
             existing_articles_df = None
 
-    if append_excel and full_text_path.exists():
+    if include_full_text_output and append_excel and full_text_path is not None and full_text_path.exists():
         try:
             existing_full_df = pd.read_excel(full_text_path, sheet_name="FullText")
         except Exception:
@@ -1710,32 +1919,56 @@ def write_excels(
         dups_df.to_excel(writer, index=False, sheet_name="Duplicates")
         articles_df.to_excel(writer, index=False, sheet_name="Articles")
 
-    # Expand full_text parts into separate columns to avoid Excel 32,767 char limit
-    expanded_rows: List[Dict[str, Any]] = []
-    max_parts = 1
-    for row in full_text_rows:
-        parts = row.pop("full_text_parts", [])
-        max_parts = max(max_parts, len(parts))
-        row["_parts"] = parts
-        expanded_rows.append(row)
+    text_by_doc_id = {str(r.get("doc_id", "")): str(r.get("full_text", "") or "") for r in full_text_rows}
+    import_rows: List[Dict[str, Any]] = []
+    for d in docs:
+        content_text = text_by_doc_id.get(d.doc_id, "")
+        title = d.short_summary or d.file_name
+        import_rows.append(
+            {
+                "Id": stable_import_id(d.file_path, title),
+                "Path": resolve_category_path(category_path_map, app_name, d.category),
+                "Title": title,
+                "Content": text_to_html(content_text),
+                "Summary": d.long_summary,
+                "Tags": ", ".join(d.tags),
+                "Attachments": attachment_path_for_doc(d.file_name, d.file_path),
+                "AutoPublish": True,
+                "ArticleType": classify_article_type_by_content(d.short_summary, d.long_summary, content_text),
+            }
+        )
+    import_path = write_import_excel(out_dir, app_name, import_rows, append_excel)
 
-    for row in expanded_rows:
-        parts = row.pop("_parts", [])
-        for i in range(max_parts):
-            key = f"full_text_part_{i+1}"
-            row[key] = parts[i] if i < len(parts) else ""
+    if include_full_text_output and full_text_path is not None:
+        # Expand full_text parts into separate columns to avoid Excel 32,767 char limit
+        expanded_rows: List[Dict[str, Any]] = []
+        max_parts = 1
+        for row in full_text_rows:
+            row_copy = dict(row)
+            parts = row_copy.pop("full_text_parts", [])
+            max_parts = max(max_parts, len(parts))
+            row_copy["_parts"] = parts
+            expanded_rows.append(row_copy)
 
-    full_df = sanitize_excel_df(pd.DataFrame(expanded_rows))
-    if append_excel and (existing_doc_keys or existing_doc_paths):
-        if "file_key" in full_df.columns and existing_doc_keys:
-            full_df = full_df[~full_df["file_key"].astype(str).isin(existing_doc_keys)]
-        if "file_path" in full_df.columns and existing_doc_paths:
-            full_df = full_df[~full_df["file_path"].astype(str).isin(existing_doc_paths)]
-    if append_excel and existing_full_df is not None:
-        full_df = pd.concat([existing_full_df, full_df], ignore_index=True)
+        for row in expanded_rows:
+            parts = row.pop("_parts", [])
+            for i in range(max_parts):
+                key = f"full_text_part_{i+1}"
+                row[key] = parts[i] if i < len(parts) else ""
 
-    with pd.ExcelWriter(full_text_path, engine="openpyxl") as writer:
-        full_df.to_excel(writer, index=False, sheet_name="FullText")
+        full_df = sanitize_excel_df(pd.DataFrame(expanded_rows))
+        if append_excel and (existing_doc_keys or existing_doc_paths):
+            if "file_key" in full_df.columns and existing_doc_keys:
+                full_df = full_df[~full_df["file_key"].astype(str).isin(existing_doc_keys)]
+            if "file_path" in full_df.columns and existing_doc_paths:
+                full_df = full_df[~full_df["file_path"].astype(str).isin(existing_doc_paths)]
+        if append_excel and existing_full_df is not None:
+            full_df = pd.concat([existing_full_df, full_df], ignore_index=True)
+
+        with pd.ExcelWriter(full_text_path, engine="openpyxl") as writer:
+            full_df.to_excel(writer, index=False, sheet_name="FullText")
+    else:
+        write_full_text_legacy_structure_note(out_dir)
 
     # Apply formatting: wrap summaries and widen columns
     try:
@@ -1781,11 +2014,13 @@ def write_excels(
         format_sheet(peers_path, "Documents", ["LongSummary", "ShortSummary", "FilePath"])
         format_sheet(peers_path, "Duplicates", ["FilePath"])
         format_sheet(peers_path, "Articles", ["FilePath", "ArticleTitle", "ArticleSummary"])
-        format_sheet(full_text_path, "FullText", ["short_summary", "long_summary", "full_text"])
+        format_sheet(import_path, "import", ["Path", "Title", "Content", "Summary", "Tags", "Attachments", "ArticleType"])
+        if include_full_text_output and full_text_path is not None:
+            format_sheet(full_text_path, "FullText", ["short_summary", "long_summary", "full_text"])
     except Exception:
         pass
 
-    return peers_path, full_text_path
+    return peers_path, full_text_path, import_path
 
 
 def write_summary_report(
@@ -2055,6 +2290,8 @@ def run_pipeline(
     app_name: Optional[str],
     embeddings_source: str,
     append_excel: bool,
+    category_path_map: Dict[str, Any],
+    include_full_text_output: bool = DEFAULT_INCLUDE_FULL_TEXT_OUTPUT,
     limit: Optional[int] = None,
     no_move: bool = False,
     progress_cb: Optional[callable] = None,
@@ -2446,10 +2683,24 @@ def run_pipeline(
         )
 
     # Write outputs
-    peers_path = full_text_path = None
+    peers_path = full_text_path = import_path = None
     try:
-        peers_path, full_text_path = write_excels(output_dir, docs, articles, full_text_rows, app_name, append_excel)
-        logging.info("Wrote %s and %s", peers_path, full_text_path)
+        peers_path, full_text_path, import_path = write_excels(
+            output_dir,
+            docs,
+            articles,
+            full_text_rows,
+            app_name,
+            append_excel,
+            category_path_map,
+            include_full_text_output,
+        )
+        logging.info("Wrote summaries workbook: %s", peers_path)
+        logging.info("Wrote import workbook: %s", import_path)
+        if full_text_path is not None:
+            logging.info("Wrote full-text workbook: %s", full_text_path)
+        else:
+            logging.info("Full-text workbook disabled by default (see full_text_legacy_structure.txt)")
     except Exception as exc:
         logging.exception("Failed to write Excel outputs: %s", exc)
         errors.append({"stage": "write_excel", "file_name": "", "file_path": str(output_dir), "error": str(exc)})
@@ -2502,6 +2753,8 @@ def run_pipeline_parallel(
     embeddings_source: str,
     append_excel: bool,
     workers: int,
+    category_path_map: Dict[str, Any],
+    include_full_text_output: bool = DEFAULT_INCLUDE_FULL_TEXT_OUTPUT,
     limit: Optional[int] = None,
     no_move: bool = False,
 ) -> None:
@@ -2924,10 +3177,24 @@ def run_pipeline_parallel(
             }
         )
 
-    peers_path = full_text_path = None
+    peers_path = full_text_path = import_path = None
     try:
-        peers_path, full_text_path = write_excels(output_dir, docs, articles, full_text_rows, app_name, append_excel)
-        logging.info("Wrote %s and %s", peers_path, full_text_path)
+        peers_path, full_text_path, import_path = write_excels(
+            output_dir,
+            docs,
+            articles,
+            full_text_rows,
+            app_name,
+            append_excel,
+            category_path_map,
+            include_full_text_output,
+        )
+        logging.info("Wrote summaries workbook: %s", peers_path)
+        logging.info("Wrote import workbook: %s", import_path)
+        if full_text_path is not None:
+            logging.info("Wrote full-text workbook: %s", full_text_path)
+        else:
+            logging.info("Full-text workbook disabled by default (see full_text_legacy_structure.txt)")
     except Exception as exc:
         logging.exception("Failed to write Excel outputs: %s", exc)
         with errors_lock:
@@ -2987,6 +3254,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-embeddings", action="store_true", help="Test embeddings endpoint and exit")
     parser.add_argument("--test-chat", action="store_true", help="Test chat endpoint and exit")
     parser.add_argument("--workers", type=int, default=1, help="Number of workers for parallel CLI processing (default: 1)")
+    parser.add_argument("--category-path-map", help="Path to category_path_map.json for import Path mapping")
+    parser.add_argument(
+        "--include-full-text-output",
+        action="store_true",
+        help="Write <app>__docatlas_full_text.xlsx (disabled by default)",
+    )
     return parser.parse_args()
 
 
@@ -2995,7 +3268,10 @@ def main() -> int:
     if args.workers < 1:
         raise ValueError("--workers must be >= 1")
     config_path = Path(args.config) if args.config else Path(__file__).with_name("applications.json")
+    category_path_map_path = Path(args.category_path_map) if args.category_path_map else Path(__file__).with_name(DEFAULT_CATEGORY_PATH_MAP_FILENAME)
+    category_path_map = load_category_path_map(category_path_map_path)
     app_config = load_app_config(config_path)
+    validate_app_and_category_map(app_config, category_path_map)
     is_gui_flow = not (args.input and args.output and (args.categories or args.app))
 
     if args.edit_config:
@@ -3137,6 +3413,8 @@ def main() -> int:
                 app_name,
                 embeddings_source,
                 append_excel,
+                category_path_map,
+                args.include_full_text_output,
                 args.limit,
                 args.no_move,
                 progress_cb,
@@ -3205,6 +3483,8 @@ def main() -> int:
                 embeddings_source,
                 append_excel,
                 args.workers,
+                category_path_map,
+                args.include_full_text_output,
                 args.limit,
                 args.no_move,
             )
@@ -3220,6 +3500,8 @@ def main() -> int:
                 app_name,
                 embeddings_source,
                 append_excel,
+                category_path_map,
+                args.include_full_text_output,
                 args.limit,
                 args.no_move,
             )

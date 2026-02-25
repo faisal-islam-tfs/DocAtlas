@@ -31,7 +31,8 @@ Outputs
   - Documents (compact per-document review)
   - Duplicates (cluster-focused duplicate review)
   - Articles (human-readable per-article summaries)
-- *_docatlas_full_text.xlsx
+- *_docatlas_import.xlsx (standalone import sheet for downstream KB import)
+- *_docatlas_full_text.xlsx (disabled by default; opt-in with --include-full-text-output)
 - summary_report.txt
 - duplicate_groups_overview.xlsx inside each <category>_Duplicate folder
 - resume.json (cache)
@@ -55,6 +56,9 @@ GUI
 CLI
 - Full CLI support for input/output/app/categories
 - --workers N for parallel CLI processing (default 1)
+- --category-path-map to supply import path mapping JSON
+- Automatic pre-run validation ensures applications/categories in applications.json and category_path_map.json stay aligned
+- --include-full-text-output to re-enable full-text workbook
 - --limit and --no-move for estimation runs
 - --charter-mode (preview-only; no file moves)
 - --overwrite-excel or append default

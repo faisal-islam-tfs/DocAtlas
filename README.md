@@ -44,8 +44,12 @@ Notes:
     - duplicate-cluster members only, sorted by category/cluster/score
   - `Articles` sheet:
     - human-readable PDF article summaries with parent doc linkage
-- `{application}__docatlas_full_text.xlsx` (falls back to `uncategorized__docatlas_full_text.xlsx`)
-  - `FullText` sheet: metadata + full extracted text
+- `{application}__docatlas_import.xlsx` (falls back to `uncategorized__docatlas_import.xlsx`)
+  - `import` sheet:
+    - `Id`, `Path`, `Title`, `Content`, `Summary`, `Tags`, `Attachments`, `AutoPublish`, `ArticleType`
+- `{application}__docatlas_full_text.xlsx` is disabled by default
+  - re-enable with `--include-full-text-output`
+  - legacy structure documented in `full_text_legacy_structure.txt`
 - `summary_report.txt`
   - counts by category, duplicates, extraction status
 - In each `<category>_Duplicate` folder:
@@ -197,6 +201,8 @@ python docatlas.py --config "C:\path\to\applications.json" --input "C:\path\to\d
 - `--no-resume`: disable resume cache
 - `--no-ocrmypdf`: disable OCRmyPDF and use Tesseract fallback
 - `--workers N`: run CLI processing in parallel with N workers (default: `1`; GUI path remains single-worker)
+- `--category-path-map`: path to `category_path_map.json` for import `Path` mapping
+- `--include-full-text-output`: write full-text workbook (disabled by default)
 - `--embeddings-source summary|full_text|none`: choose embeddings input (default: `full_text`)
 - `--overwrite-excel`: overwrite Excel outputs instead of appending (default is append)
 - `--limit N`: process only the first N files (useful for time estimation)
@@ -205,6 +211,10 @@ python docatlas.py --config "C:\path\to\applications.json" --input "C:\path\to\d
 - `--config`: path to applications config JSON
 - `--app`: application name from config (use instead of `--categories`)
 - `--edit-config`: open the applications config editor
+
+Config validation (automatic on every run):
+- `applications.json` and `category_path_map.json` are validated before processing.
+- Run fails fast if an application/category is missing on either side, duplicated, or mapped to an empty path.
 - `--test-embeddings`: test embeddings endpoint/key and exit
 - `--test-chat`: test chat endpoint/key and exit
 
@@ -226,6 +236,7 @@ python docatlas.py --input "C:\path\to\docs" --output "C:\path\to\out" --app "Se
 - Embeddings can be computed from the **full text** (default, stricter), **long summary** (lower cost), or **disabled** (hash-only duplicates).
 - Duplicate clusters are moved to `<category>_Duplicate/<DuplicateClusterID>/` (including canonical + duplicate members).
 - Each `<category>_Duplicate` folder also gets `duplicate_groups_overview.xlsx` for manual assignment/review.
+- Import output is written as a standalone workbook: `<app>__docatlas_import.xlsx`.
 - PDF article splitting uses a heading-based heuristic.
 - Resume cache stored as `resume.json` in the output folder.
 - OCR fallback for PDFs: OCRmyPDF is used by default if extracted text is too short, then Tesseract OCR as a fallback.
@@ -261,7 +272,7 @@ If these are not installed, the tool will still run and mark `extraction_status`
 The tool will warn at startup if OCR dependencies are missing.
 
 ### Excel Full Text
-Excel cells have a 32,767 character limit. Full text is split across columns:
-- `full_text_part_1`, `full_text_part_2`, ...
-- `full_text` contains the first part for quick viewing.
+Full-text workbook output is disabled by default.
+- Re-enable with: `--include-full-text-output`
+- Legacy structure is documented in `full_text_legacy_structure.txt`
 

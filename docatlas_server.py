@@ -7,9 +7,11 @@ from pathlib import Path
 
 from docatlas import (
     azure_config_from_env,
+    load_category_path_map,
     load_app_config,
     resolve_embeddings_source,
     run_pipeline_parallel,
+    validate_app_and_category_map,
     warn_missing_ocr_deps,
 )
 
@@ -31,13 +33,22 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-move", action="store_true", help="Do not move files (for estimation)")
     p.add_argument("--charter-mode", action="store_true", help="Preview-only mode (no file moves)")
     p.add_argument("--signal-scan", action="store_true", help="Deprecated alias for --charter-mode")
+    p.add_argument("--category-path-map", help="Path to category_path_map.json for import Path mapping")
+    p.add_argument(
+        "--include-full-text-output",
+        action="store_true",
+        help="Write <app>__docatlas_full_text.xlsx (disabled by default)",
+    )
     return p.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     config_path = Path(args.config) if args.config else Path(__file__).with_name("applications.json")
+    category_path_map_path = Path(args.category_path_map) if args.category_path_map else Path(__file__).with_name("category_path_map.json")
+    category_path_map = load_category_path_map(category_path_map_path)
     app_config = load_app_config(config_path)
+    validate_app_and_category_map(app_config, category_path_map)
 
     if args.categories:
         categories = [c.strip() for c in args.categories.split(";") if c.strip()]
@@ -71,6 +82,8 @@ def main() -> int:
         embeddings_source,
         not args.overwrite_excel,
         args.workers,
+        category_path_map,
+        args.include_full_text_output,
         args.limit,
         no_move,
     )

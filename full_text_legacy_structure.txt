@@ -1,0 +1,21 @@
+Legacy Full Text Workbook Structure
+==================================
+
+Workbook name pattern:
+- <app_slug>__docatlas_full_text.xlsx
+
+Sheet:
+- FullText
+
+Typical columns:
+- doc_id, file_key, category, short_summary, long_summary, tags,
+  word_count, char_count, extraction_status, review_flags,
+  full_text, full_text_parts_count, full_text_part_1..N,
+  moved_to, file_name, file_path
+
+Purpose:
+- Preserve complete extracted document text split into Excel-safe chunks.
+
+Status:
+- Full-text workbook output is currently disabled by default.
+- Re-enable by running with --include-full-text-output.
