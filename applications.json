@@ -191,7 +191,9 @@
     "Molecular Biology": [
       "DNA Extraction and Purification",
       "Nucleic Acid Labeling and Detection",
-      "RNA Isolation and Purification"
+      "RNA Isolation and Purification",
+      "Reverse Transcription",
+      "Northernblot"
     ],
     "Next Generation Sequencing Applications": [
       "Fragment Analysis Software",

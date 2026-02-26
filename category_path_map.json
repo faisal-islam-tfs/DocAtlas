@@ -190,7 +190,9 @@
   "Molecular Biology": {
     "DNA Extraction and Purification": "Molecular Biology/Molecular Biology Reagents and Kits/DNA Extraction and Purification",
     "Nucleic Acid Labeling and Detection": "Molecular Biology/Molecular Biology Reagents and Kits/Nucleic Acid Labeling and Detection",
-    "RNA Isolation and Purification": "Molecular Biology/Molecular Biology Reagents and Kits/RNA Isolation and Purification"
+    "RNA Isolation and Purification": "Molecular Biology/Molecular Biology Reagents and Kits/RNA Isolation and Purification",
+    "Reverse Transcription": "Molecular Biology/Molecular Biology Reagents and Kits/Reverse Transcription",
+    "Northernblot": "Molecular Biology/Molecular Biology Reagents and Kits/Northernblot"
   },
   "Next Generation Sequencing Applications": {
     "Fragment Analysis Software": "Next Generation Sequencing Applications/Sanger Sequencing and Fragment Analysis/Fragment Analysis Software",
