@@ -76,24 +76,36 @@
       "iBright"
     ],
     "Cell Culture": [
+      "Cell Culture Internal Documentation",
+      "Liquid",
+      "DPM",
+      "AGT",
       "Antibiotics (Content Reuse from Laboratory Chemicals)",
-      "Cell Target Type Media",
-      "Cell Therapy Systems CTS Media",
-      "Classical and Basal Media",
-      "Contaminant Detection and Removal Reagents",
       "Dissociation Reagents",
-      "Growth Factors and Hormones",
-      "Microbiological Media and Additives",
+      "Growth Factors and Hormones (content reuse from Proteins)",
       "Nutritional Supplements",
-      "Other Media",
-      "Process-Associated Media",
-      "Serum-Free Media SFM"
+      "Cell culture Plastics (Content Reuse from Plastics)",
+      "Cells",
+      "Extracellular Matrices and 3D Culture",
+      "Reprogramming",
+      "Sera",
+      "Gibco Manufacturing and Packaging Docs",
+      "Cellmation Applications"
     ],
     "Cell and Gene Therapy Applications": [
-      "CTS DynaCellect",
       "CTS Dynabeads",
-      "CTS Media",
-      "CTS Rotea"
+      "CTS Media and supplements",
+      "CTS Cytotune",
+      "Pepro GMP Recombinant Proteins (content reuse from proteins)",
+      "CTS Dynacellect",
+      "CTS Compleo",
+      "CTS Rotea",
+      "CTS Xenon",
+      "Rotea Applications",
+      "Compleo Applications",
+      "DynaCellect Applications",
+      "Xenon Applications",
+      "CTS workflow"
     ],
     "Essential Lab Equipment": [
       "CO2 Incubators",
