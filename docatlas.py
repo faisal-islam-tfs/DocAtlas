@@ -898,18 +898,27 @@ def extract_text_pdf(path: Path, ocrmypdf_enabled: bool) -> Tuple[str, List[str]
     if len(text.strip()) >= MIN_EXTRACTED_CHARS:
         return text, page_texts, "ok"
 
-    # OCRmyPDF default (if available)
+    # OCRmyPDF default (if available):
+    # 1) try without force first (better for tagged/text PDFs),
+    # 2) force OCR only if still low-text.
     if ocrmypdf_enabled and ocrmypdf is not None:
-        logging.info("OCR triggered (OCRmyPDF) for %s", path)
-        ocr_text, ocr_pages, ocr_status = ocrmypdf_ocr_pdf(path, force_ocr=True)
+        logging.info("OCR triggered (OCRmyPDF, non-forced pass) for %s", path)
+        ocr_text, ocr_pages, ocr_status = ocrmypdf_ocr_pdf(path, force_ocr=False)
         if len(ocr_text.strip()) >= MIN_EXTRACTED_CHARS:
             return ocr_text, ocr_pages, "ocrmypdf_used"
+
+        logging.info("OCR triggered (OCRmyPDF, forced pass) for %s", path)
+        forced_text, forced_pages, forced_status = ocrmypdf_ocr_pdf(path, force_ocr=True)
+        if len(forced_text.strip()) >= MIN_EXTRACTED_CHARS:
+            return forced_text, forced_pages, "ocrmypdf_used_forced"
+
         # If OCRmyPDF failed or produced no text, try Tesseract fallback
         logging.info("OCR triggered (Tesseract fallback) for %s", path)
         ocr_texts, status = ocr_pdf(path)
         if ocr_texts:
             return "\n".join(ocr_texts), ocr_texts, "ocrmypdf_failed_then_ocr_used"
-        return text, page_texts, ocr_status
+        # Preserve the most specific OCRmyPDF status from the forced pass.
+        return text, page_texts, forced_status if forced_status else ocr_status
 
     # Fallback OCR (Tesseract)
     if ocrmypdf_enabled:
