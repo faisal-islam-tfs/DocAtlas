@@ -13,13 +13,15 @@
 - .xlsx -> openpyxl
 - .pdf -> pdfplumber
   - If text is too short, OCR runs:
-    - OCRmyPDF (force OCR)
+    - OCRmyPDF (non-forced pass)
+    - OCRmyPDF (forced pass only if still low-text)
     - If needed, Tesseract fallback
   - OCR is used only for PDFs with low/empty extracted text
   - OCR does not use the LLM; it is a separate local process
 
 3) PDF article splitting
-- PDFs are split into articles using heading heuristics
+- PDFs are split into articles using conservative strong-heading heuristics
+- If structural evidence is weak/ambiguous, the PDF is treated as one article
 - Article list used for per-article summaries
 
 4) Summarization + classification

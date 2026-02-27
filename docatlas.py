@@ -115,7 +115,12 @@ MAX_ARTICLE_CHARS = 20000
 DUPLICATE_THRESHOLD = 0.97
 MIN_EXTRACTED_CHARS = 200
 MIN_ARTICLE_BODY_CHARS = 400
-MIN_HEADING_GAP_LINES = 3
+MIN_SPLIT_TOTAL_CHARS = 2500
+MIN_SPLIT_SECTIONS = 2
+MIN_SECTION_CHARS = 900
+MAX_SINGLE_SECTION_SHARE = 0.82
+MIN_BOUNDARY_GAP_LINES = 12
+MIN_BOUNDARY_GAP_CHARS = 800
 MIN_EMBEDDING_CHARS = 500
 MIN_EMBEDDING_CHARS_SUMMARY = 200
 MAX_TAGS = 10
@@ -1102,28 +1107,63 @@ def ocr_pdf(path: Path) -> Tuple[List[str], str]:
     return texts, "no_text"
 
 
-def is_heading(line: str) -> bool:
+def is_strong_heading(line: str) -> bool:
     line = (line or "").strip()
     if not line:
         return False
-    if len(line) > 120:
+    if len(line) < 8 or len(line) > 110:
         return False
-    if len(line) < 6:
+    if not re.search(r"[A-Za-z]", line):
         return False
-    if re.match(r"^(article|section)\s+\d+", line, re.IGNORECASE):
+    if line.endswith((".", ",", ";")) and not re.match(r"^[A-Z0-9][A-Z0-9 \-_/()]+$", line):
+        return False
+
+    if re.match(r"^(article|section|chapter)\s+([0-9]+|[ivxlcdm]+)\b", line, re.IGNORECASE):
         return True
-    if re.match(r"^\d+(\.|\))\s+\S+", line):
+    if re.match(r"^\d+(\.\d+){0,2}[)\.\-:]?\s+[A-Z][^\n]{2,}$", line):
         return True
-    if line.isupper() and len(line) >= 6:
+    if re.match(r"^\([0-9]+\)\s+[A-Z][^\n]{2,}$", line):
         return True
-    # Title Case heuristic
-    words = line.split()
-    if len(words) >= 3 and sum(1 for w in words if w[:1].isupper()) / len(words) > 0.6:
-        return True
+
+    # All-caps headings are strong signals if length/word-count are sane.
+    if line.isupper():
+        words = line.split()
+        if 2 <= len(words) <= 14:
+            return True
     return False
 
 
-def split_pdf_into_articles(page_texts: List[str]) -> List[Tuple[str, str]]:
+def is_heading(line: str) -> bool:
+    # Backward-compatible alias used by older call sites.
+    return is_strong_heading(line)
+
+
+def _single_article(lines: List[str]) -> List[Tuple[str, str]]:
+    if not lines:
+        return []
+    return [("Article 1", "\n".join(lines))]
+
+
+def _log_split_decision(
+    source_label: str,
+    decision: str,
+    candidate_count: int,
+    final_sections: int,
+    total_chars: int,
+    reason: str,
+) -> None:
+    logging.info(
+        "Article split: decision=%s source=%s candidates=%d final_sections=%d total_chars=%d reason=%s",
+        decision,
+        source_label,
+        candidate_count,
+        final_sections,
+        total_chars,
+        reason,
+    )
+
+
+def split_pdf_into_articles(page_texts: List[str], source_label: str = "<pdf>") -> List[Tuple[str, str]]:
     lines: List[str] = []
     for page in page_texts:
         for line in (page or "").splitlines():
@@ -1131,56 +1171,117 @@ def split_pdf_into_articles(page_texts: List[str]) -> List[Tuple[str, str]]:
             if cleaned:
                 lines.append(cleaned)
     if not lines:
+        _log_split_decision(source_label, "single", 0, 0, 0, "no_lines")
         return []
 
-    indices: List[int] = []
-    titles: List[str] = []
+    total_chars = sum(len(line) for line in lines)
+    if total_chars < MIN_SPLIT_TOTAL_CHARS:
+        _log_split_decision(source_label, "single", 0, 1, total_chars, "below_min_total_chars")
+        return _single_article(lines)
+
+    line_char_offsets: List[int] = []
+    running = 0
+    for line in lines:
+        line_char_offsets.append(running)
+        running += len(line) + 1
+
+    candidates: List[Tuple[int, str]] = []
     for i, line in enumerate(lines):
-        if is_heading(line):
-            if indices and i - indices[-1] < MIN_HEADING_GAP_LINES:
-                continue
-            indices.append(i)
-            titles.append(line)
+        if is_strong_heading(line):
+            if candidates:
+                prev_i = candidates[-1][0]
+                if i - prev_i < MIN_BOUNDARY_GAP_LINES:
+                    continue
+                if line_char_offsets[i] - line_char_offsets[prev_i] < MIN_BOUNDARY_GAP_CHARS:
+                    continue
+            candidates.append((i, line))
 
-    if not indices:
-        return [("Article 1", "\n".join(lines))]
+    if len(candidates) < MIN_SPLIT_SECTIONS:
+        _log_split_decision(
+            source_label,
+            "single",
+            len(candidates),
+            1,
+            total_chars,
+            "insufficient_heading_candidates",
+        )
+        return _single_article(lines)
 
-    articles: List[Tuple[str, str]] = []
-    for idx, start in enumerate(indices):
-        end = indices[idx + 1] if idx + 1 < len(indices) else len(lines)
-        title = titles[idx] if idx < len(titles) else f"Article {idx + 1}"
+    sections: List[Tuple[str, str]] = []
+    for idx, (start, title) in enumerate(candidates):
+        end = candidates[idx + 1][0] if idx + 1 < len(candidates) else len(lines)
         body = "\n".join(lines[start + 1 : end]).strip()
         if not body:
             body = "\n".join(lines[start:end]).strip()
-        articles.append((title, body))
+        sections.append((title or f"Article {idx + 1}", body))
 
-    # Merge very small sections into neighbors to avoid noisy article splits
+    # Merge very small sections into neighbors to avoid fragmented article tabs.
     merged: List[Tuple[str, str]] = []
-    for title, body in articles:
-        if not merged:
-            merged.append((title, body))
+    for title, body in sections:
+        clean_body = (body or "").strip()
+        if not clean_body:
             continue
-        if len(body) < MIN_ARTICLE_BODY_CHARS:
+        if not merged:
+            merged.append((title, clean_body))
+            continue
+        if len(clean_body) < MIN_SECTION_CHARS:
             prev_title, prev_body = merged[-1]
-            merged[-1] = (prev_title, (prev_body + "\n" + body).strip())
-        else:
-            merged.append((title, body))
+            merged[-1] = (prev_title, (prev_body + "\n" + clean_body).strip())
+            continue
+        merged.append((title, clean_body))
 
-    # Drop articles still too small by merging into previous
     final: List[Tuple[str, str]] = []
     for title, body in merged:
         if not final:
             final.append((title, body))
             continue
-        if len(body) < MIN_ARTICLE_BODY_CHARS:
+        if len(body) < MIN_SECTION_CHARS:
             prev_title, prev_body = final[-1]
             final[-1] = (prev_title, (prev_body + "\n" + body).strip())
         else:
             final.append((title, body))
 
-    # If everything merged into a tiny blob, treat as a single article
-    if final and len(final) == 1 and len(final[0][1]) < MIN_ARTICLE_BODY_CHARS:
-        return [("Article 1", "\n".join(lines))]
+    if len(final) < MIN_SPLIT_SECTIONS:
+        _log_split_decision(
+            source_label,
+            "single",
+            len(candidates),
+            len(final),
+            total_chars,
+            "insufficient_final_sections",
+        )
+        return _single_article(lines)
+
+    section_sizes = [len((body or "").strip()) for _, body in final if (body or "").strip()]
+    if not section_sizes:
+        _log_split_decision(source_label, "single", len(candidates), len(final), total_chars, "empty_sections")
+        return _single_article(lines)
+
+    strong_sections = sum(1 for n in section_sizes if n >= MIN_SECTION_CHARS)
+    if strong_sections < MIN_SPLIT_SECTIONS:
+        _log_split_decision(
+            source_label,
+            "single",
+            len(candidates),
+            len(final),
+            total_chars,
+            "insufficient_strong_sections",
+        )
+        return _single_article(lines)
+
+    dominant_share = max(section_sizes) / max(1, sum(section_sizes))
+    if dominant_share > MAX_SINGLE_SECTION_SHARE:
+        _log_split_decision(
+            source_label,
+            "single",
+            len(candidates),
+            len(final),
+            total_chars,
+            "dominant_single_section",
+        )
+        return _single_article(lines)
+
+    _log_split_decision(source_label, "multi", len(candidates), len(final), total_chars, "passed_conservative_checks")
     return final
 
 
@@ -1848,7 +1949,7 @@ def process_file(path: Path, ocrmypdf_enabled: bool) -> Tuple[str, List[Tuple[st
         return text, [], status
     if ext == ".pdf":
         text, pages, status = extract_text_pdf(path, ocrmypdf_enabled)
-        articles = split_pdf_into_articles(pages)
+        articles = split_pdf_into_articles(pages, source_label=str(path))
         return text, articles, status
     raise ValueError(f"Unsupported file type: {ext}")
 
@@ -2635,7 +2736,7 @@ def run_pipeline(
             else:
                 try:
                     _, pages, _ = extract_text_pdf(path, ocrmypdf_enabled)
-                    article_list = split_pdf_into_articles(pages)
+                    article_list = split_pdf_into_articles(pages, source_label=str(path))
                 except Exception as exc:
                     logging.exception("Failed to split articles for %s: %s", path, exc)
                     errors.append({"stage": "split_articles", "file_name": path.name, "file_path": str(path), "error": str(exc)})

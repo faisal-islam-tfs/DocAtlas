@@ -5,7 +5,7 @@ Input & Extraction
 - Supports .pdf, .doc, .docx, .ppt, .pptx, .xlsx
 - .doc auto-converted to .docx via LibreOffice (if installed)
 - PDF extraction via pdfplumber
-- OCR for PDFs: OCRmyPDF (force OCR) -> Tesseract fallback
+- OCR for PDFs: OCRmyPDF (non-forced pass, then forced pass only if needed) -> Tesseract fallback
 - OCR of embedded images in .docx and .pptx when OCR is enabled
 - Extracts Word tables and Excel sheets
 - Extracts PowerPoint slide text
@@ -18,7 +18,8 @@ Summarization & Classification (LLM)
 - Article summaries for PDFs
 
 PDF Article Handling
-- Splits PDFs into articles by heading heuristics
+- Splits PDFs into articles using conservative strong-heading heuristics
+- Defaults to one article when structure is weak/ambiguous to avoid over-splitting
 - Stores article summaries separately
 
 Duplicate Detection

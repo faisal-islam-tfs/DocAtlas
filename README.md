@@ -248,9 +248,10 @@ python docatlas.py --input "C:\path\to\docs" --output "C:\path\to\out" --app "Se
 - Duplicate clusters are moved to `<category>_Duplicate/<DuplicateClusterID>/` (including canonical + duplicate members).
 - Each `<category>_Duplicate` folder also gets `duplicate_groups_overview.xlsx` for manual assignment/review.
 - Import output is written as a standalone workbook: `<app>__docatlas_import.xlsx`.
-- PDF article splitting uses a heading-based heuristic.
+- PDF article splitting uses a conservative strong-heading heuristic.
+- Default is conservative: if structure is ambiguous, one article is created for the document.
 - Resume cache stored as `resume.json` in the output folder.
-- OCR fallback for PDFs: OCRmyPDF is used by default if extracted text is too short, then Tesseract OCR as a fallback.
+- OCR fallback for PDFs: if extracted text is too short, OCRmyPDF runs non-forced first, then forced pass only if still low-text, then Tesseract fallback.
 - If OCR is enabled, embedded images inside `.docx` and `.pptx` are also OCR-processed.
 - Embeddings are skipped for very short texts to reduce cost (configurable in code).
 - `.doc` files are supported by auto-conversion to `.docx` via LibreOffice (`soffice`) if installed.
@@ -260,6 +261,7 @@ python docatlas.py --input "C:\path\to\docs" --output "C:\path\to\out" --app "Se
 - `extraction_status` column values:
   - `ok`: text extracted normally
   - `ocrmypdf_used`: OCRmyPDF used successfully
+  - `ocrmypdf_used_forced`: OCRmyPDF forced pass used successfully after non-forced pass was insufficient
   - `ocrmypdf_failed_then_ocr_used`: OCRmyPDF failed/no text, Tesseract OCR used
   - `ocr_used`: Tesseract OCR used (OCRmyPDF unavailable)
   - `no_text`: no text after extraction/OCR

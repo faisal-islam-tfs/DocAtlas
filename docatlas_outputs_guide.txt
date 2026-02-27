@@ -40,6 +40,12 @@ Import sheet mapping behavior
 - ArticleType is content-based rule classification.
 - AutoPublish is always true.
 
+Articles sheet behavior
+-----------------------
+- Article splitting applies to PDFs only.
+- Splitting is conservative: multiple article rows are created only with strong structural evidence.
+- If a PDF appears to be a single article, one article row is written for that document.
+
 File move behavior
 ------------------
 - Non-duplicates: <category>/
