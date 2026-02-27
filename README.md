@@ -113,7 +113,11 @@ setx AZURE_EMBEDDINGS_DEPLOYMENT "text-embedding-3-small"
 setx AZURE_CHAT_PATH "/openai/deployments/{deployment}/chat/completions"
 setx AZURE_EMBEDDINGS_PATH "/openai/deployments/{deployment}/embeddings"
 setx AZURE_INCLUDE_MODEL_IN_BODY "1"
-setx DOCATLAS_API_DELAY "0.3"
+setx DOCATLAS_API_DELAY "0.5"
+setx DOCATLAS_API_MAX_RETRIES "10"
+setx DOCATLAS_API_RETRY_BASE "2.0"
+setx DOCATLAS_API_RETRY_MAX "60"
+setx DOCATLAS_API_TIMEOUT "150"
 
 # Optional: separate keys for chat/embeddings (if your gateway uses different keys)
 setx AZURE_CHAT_API_KEY "<your-chat-key>"
@@ -123,7 +127,14 @@ setx AZURE_EMBEDDINGS_API_KEY "<your-embeddings-key>"
 If your API gateway expects a different path, override `AZURE_CHAT_PATH` and `AZURE_EMBEDDINGS_PATH`.
 
 `DOCATLAS_API_DELAY` adds a small delay (seconds) before each LLM/embeddings call to reduce
-transient Windows socket exhaustion errors (e.g., WinError 10048). Default is 0.3 seconds.
+transient Windows socket exhaustion errors (e.g., WinError 10048). Default is 0.5 seconds.
+
+For transient DNS/network instability, DocAtlas now retries chat/embeddings requests with exponential
+backoff and jitter. You can tune with:
+- `DOCATLAS_API_MAX_RETRIES` (default `10`)
+- `DOCATLAS_API_RETRY_BASE` seconds (default `2.0`)
+- `DOCATLAS_API_RETRY_MAX` seconds cap (default `60`)
+- `DOCATLAS_API_TIMEOUT` seconds per request (default `150`)
 
 In the GUI flow, if keys are missing, DocAtlas will prompt separately for the **LLM key** and the **embeddings key**.
 

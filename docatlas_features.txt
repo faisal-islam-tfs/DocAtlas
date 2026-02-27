@@ -73,7 +73,9 @@ Reporting & Cost
 - OCR usage count and duplicate group stats
 - Document length stats (avg/longest/shortest)
 - Errors captured per file and reported without stopping the run
- - Optional API call delay (DOCATLAS_API_DELAY) to reduce transient socket errors
+- Optional API call delay (DOCATLAS_API_DELAY) to reduce transient socket errors
+- Retries for transient API/DNS/network failures with exponential backoff + jitter
+  (DOCATLAS_API_MAX_RETRIES, DOCATLAS_API_RETRY_BASE, DOCATLAS_API_RETRY_MAX, DOCATLAS_API_TIMEOUT)
 
 Hidden/Internal Features
 - Auto-updated runtime baseline saved after every run

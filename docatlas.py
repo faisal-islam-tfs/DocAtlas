@@ -16,6 +16,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import re
 import shutil
 import subprocess
@@ -102,7 +103,12 @@ DEFAULT_EMBEDDINGS_DEPLOYMENT = "text-embedding-3-small"
 DEFAULT_API_KEY_HEADER = "api-key"
 DEFAULT_CHAT_PATH = "/openai/deployments/{deployment}/chat/completions"
 DEFAULT_EMBEDDINGS_PATH = "/openai/deployments/{deployment}/embeddings"
-DEFAULT_API_DELAY_SEC = 0.3
+# Safe network defaults for long server runs with intermittent DNS/network instability.
+DEFAULT_API_DELAY_SEC = 0.5
+DEFAULT_API_MAX_RETRIES = 10
+DEFAULT_API_RETRY_BASE_SEC = 2.0
+DEFAULT_API_RETRY_MAX_SEC = 60.0
+DEFAULT_API_TIMEOUT_SEC = 150
 
 MAX_CHARS_PER_CHUNK = 12000
 MAX_ARTICLE_CHARS = 20000
@@ -361,6 +367,112 @@ def api_delay_sec() -> float:
     except Exception:
         pass
     return DEFAULT_API_DELAY_SEC
+
+
+def api_max_retries() -> int:
+    val = env("DOCATLAS_API_MAX_RETRIES", "")
+    try:
+        if val:
+            return max(1, int(val))
+    except Exception:
+        pass
+    return DEFAULT_API_MAX_RETRIES
+
+
+def api_retry_base_sec() -> float:
+    val = env("DOCATLAS_API_RETRY_BASE", "")
+    try:
+        if val:
+            return max(0.1, float(val))
+    except Exception:
+        pass
+    return DEFAULT_API_RETRY_BASE_SEC
+
+
+def api_retry_max_sec() -> float:
+    val = env("DOCATLAS_API_RETRY_MAX", "")
+    try:
+        if val:
+            return max(1.0, float(val))
+    except Exception:
+        pass
+    return DEFAULT_API_RETRY_MAX_SEC
+
+
+def api_timeout_sec() -> float:
+    val = env("DOCATLAS_API_TIMEOUT", "")
+    try:
+        if val:
+            return max(5.0, float(val))
+    except Exception:
+        pass
+    return float(DEFAULT_API_TIMEOUT_SEC)
+
+
+def _retry_sleep_seconds(attempt: int) -> float:
+    base = api_retry_base_sec()
+    cap = api_retry_max_sec()
+    backoff = min(cap, base * (2 ** max(0, attempt)))
+    # Add jitter to avoid synchronized retries.
+    jitter = random.uniform(0.0, min(2.0, 0.2 * backoff))
+    return backoff + jitter
+
+
+def _is_retryable_request_error(exc: Exception) -> bool:
+    return isinstance(exc, (requests.exceptions.Timeout, requests.exceptions.ConnectionError))
+
+
+def _post_with_retries(
+    op_name: str,
+    url: str,
+    headers: Dict[str, str],
+    params: Dict[str, Any],
+    payload: Dict[str, Any],
+) -> requests.Response:
+    delay = api_delay_sec()
+    retries = api_max_retries()
+    timeout = api_timeout_sec()
+    transient_statuses = {408, 425, 429, 500, 502, 503, 504}
+    last_exc: Optional[Exception] = None
+
+    for attempt in range(retries):
+        if delay:
+            time.sleep(delay)
+        try:
+            resp = requests.post(url, headers=headers, params=params, json=payload, timeout=timeout)
+        except Exception as exc:
+            if _is_retryable_request_error(exc) and attempt < retries - 1:
+                wait_sec = _retry_sleep_seconds(attempt)
+                logging.warning(
+                    "%s request transient error on attempt %d/%d: %s; retrying in %.1fs",
+                    op_name,
+                    attempt + 1,
+                    retries,
+                    exc,
+                    wait_sec,
+                )
+                time.sleep(wait_sec)
+                last_exc = exc
+                continue
+            raise
+
+        if resp.status_code in transient_statuses and attempt < retries - 1:
+            wait_sec = _retry_sleep_seconds(attempt)
+            logging.warning(
+                "%s request transient status %s on attempt %d/%d; retrying in %.1fs",
+                op_name,
+                resp.status_code,
+                attempt + 1,
+                retries,
+                wait_sec,
+            )
+            time.sleep(wait_sec)
+            continue
+        return resp
+
+    if last_exc is not None:
+        raise RuntimeError(f"{op_name} request failed after retries: {last_exc}")
+    raise RuntimeError(f"{op_name} request failed after retries")
 
 
 def list_files(input_dir: Path) -> List[Path]:
@@ -1084,26 +1196,18 @@ def call_azure_chat(cfg: AzureConfig, messages: List[Dict[str, str]]) -> str:
 
     params = {"api-version": cfg.api_version}
 
-    delay = api_delay_sec()
-    for attempt in range(5):
-        if delay:
-            time.sleep(delay)
-        resp = requests.post(url, headers=headers, params=params, json=payload, timeout=120)
-        if resp.status_code in (429, 500, 502, 503, 504):
-            time.sleep(1.5 * (2 ** attempt))
-            continue
-        if resp.status_code >= 400:
-            raise RuntimeError(f"Chat API error {resp.status_code}: {resp.text}")
-        data = resp.json()
-        choices = data.get("choices") or []
-        if not choices:
-            raise RuntimeError("Chat API returned no choices")
-        message = choices[0].get("message", {})
-        content = message.get("content", "") or ""
-        in_chars = sum(len(m.get("content", "") or "") for m in messages)
-        add_chat_usage(in_chars, len(content))
-        return content
-    raise RuntimeError("Chat API failed after retries")
+    resp = _post_with_retries("Chat API", url, headers, params, payload)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Chat API error {resp.status_code}: {resp.text}")
+    data = resp.json()
+    choices = data.get("choices") or []
+    if not choices:
+        raise RuntimeError("Chat API returned no choices")
+    message = choices[0].get("message", {})
+    content = message.get("content", "") or ""
+    in_chars = sum(len(m.get("content", "") or "") for m in messages)
+    add_chat_usage(in_chars, len(content))
+    return content
 
 
 def call_azure_embeddings(cfg: AzureConfig, text: str) -> List[float]:
@@ -1113,23 +1217,15 @@ def call_azure_embeddings(cfg: AzureConfig, text: str) -> List[float]:
     if cfg.include_model_in_body:
         payload["model"] = cfg.embeddings_deployment
     params = {"api-version": cfg.api_version}
-    delay = api_delay_sec()
-    for attempt in range(5):
-        if delay:
-            time.sleep(delay)
-        resp = requests.post(url, headers=headers, params=params, json=payload, timeout=120)
-        if resp.status_code in (429, 500, 502, 503, 504):
-            time.sleep(1.5 * (2 ** attempt))
-            continue
-        if resp.status_code >= 400:
-            raise RuntimeError(f"Embeddings API error {resp.status_code}: {resp.text}")
-        data = resp.json()
-        data_list = data.get("data") or []
-        if not data_list:
-            raise RuntimeError("Embeddings API returned no data")
-        add_embed_usage(len(text))
-        return data_list[0].get("embedding")
-    raise RuntimeError("Embeddings API failed after retries")
+    resp = _post_with_retries("Embeddings API", url, headers, params, payload)
+    if resp.status_code >= 400:
+        raise RuntimeError(f"Embeddings API error {resp.status_code}: {resp.text}")
+    data = resp.json()
+    data_list = data.get("data") or []
+    if not data_list:
+        raise RuntimeError("Embeddings API returned no data")
+    add_embed_usage(len(text))
+    return data_list[0].get("embedding")
 
 
 def extract_json(text: str) -> Dict[str, Any]:
