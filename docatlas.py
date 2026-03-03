@@ -1562,12 +1562,12 @@ def split_pdf_into_articles(page_texts: List[str], source_label: str = "<pdf>") 
     return final
 
 
-def call_azure_chat(cfg: AzureConfig, messages: List[Dict[str, str]]) -> str:
+def call_azure_chat(cfg: AzureConfig, messages: List[Dict[str, str]], temperature: float = 0.2) -> str:
     url = build_url(cfg.chat_base_url, cfg.chat_path, cfg.chat_deployment)
     headers = {cfg.api_key_header: cfg.chat_api_key, "Content-Type": "application/json"}
     payload: Dict[str, Any] = {
         "messages": messages,
-        "temperature": 0.2,
+        "temperature": float(temperature),
     }
     if cfg.include_model_in_body:
         payload["model"] = cfg.chat_deployment
@@ -1668,7 +1668,8 @@ def summarize_with_model(cfg: AzureConfig, text: str, categories: List[str]) -> 
             ),
         },
     ]
-    content = call_azure_chat(cfg, messages)
+    # Keep category + summary selection deterministic across runs.
+    content = call_azure_chat(cfg, messages, temperature=0.0)
     return extract_json(content)
 
 
