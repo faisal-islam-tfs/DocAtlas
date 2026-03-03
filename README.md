@@ -136,6 +136,10 @@ backoff and jitter. You can tune with:
 - `DOCATLAS_API_RETRY_MAX` seconds cap (default `60`)
 - `DOCATLAS_API_TIMEOUT` seconds per request (default `150`)
 
+If the chat endpoint returns a `content_filter` error for a document/article, DocAtlas now applies
+a local deterministic extractive fallback summary instead of leaving that summary empty. Documents
+that used this fallback get `summary_fallback_content_filter` in `ReviewFlag`.
+
 In the GUI flow, if keys are missing, DocAtlas will prompt separately for the **LLM key** and the **embeddings key**.
 
 ## OCR Dependencies (Windows)
@@ -212,6 +216,7 @@ python docatlas.py --config "C:\path\to\applications.json" --input "C:\path\to\d
 - `--no-resume`: disable resume cache
 - `--no-ocrmypdf`: disable OCRmyPDF and use Tesseract fallback
 - `--workers N`: run CLI processing in parallel with N workers (default: `1`; GUI path remains single-worker)
+- `--no-articles`: disable PDF article generation (no article split/summarize/dedup; `Articles` sheet remains empty)
 - `--category-path-map`: path to `category_path_map.json` for import `Path` mapping
 - `--include-full-text-output`: write full-text workbook (disabled by default)
 - `--embeddings-source summary|full_text|none`: choose embeddings input (default: `full_text`)

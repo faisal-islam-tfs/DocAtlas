@@ -27,6 +27,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no-resume", action="store_true", help="Disable resume cache")
     p.add_argument("--no-ocrmypdf", action="store_true", help="Disable OCRmyPDF and use Tesseract fallback")
     p.add_argument("--workers", type=int, default=4, help="Parallel workers (default: 4)")
+    p.add_argument("--no-articles", action="store_true", help="Disable PDF article splitting/summarization and keep article outputs empty")
     p.add_argument("--embeddings-source", choices=["summary", "full_text", "none"], help="Use summaries, full text, or disable embeddings")
     p.add_argument("--overwrite-excel", action="store_true", help="Overwrite Excel outputs instead of appending")
     p.add_argument("--limit", type=int, help="Process only the first N files (for estimation)")
@@ -86,6 +87,7 @@ def main() -> int:
         args.include_full_text_output,
         args.limit,
         no_move,
+        not args.no_articles,
     )
     return 0
 

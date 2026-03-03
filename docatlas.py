@@ -124,6 +124,14 @@ MIN_BOUNDARY_GAP_CHARS = 800
 MIN_EMBEDDING_CHARS = 500
 MIN_EMBEDDING_CHARS_SUMMARY = 200
 MAX_TAGS = 10
+FALLBACK_DOC_LONG_SENTENCES = 7
+FALLBACK_DOC_SHORT_SENTENCES = 2
+FALLBACK_ARTICLE_SENTENCES = 8
+FALLBACK_MAX_SENTENCE_CHARS = 420
+FALLBACK_MIN_SENTENCE_CHARS = 35
+FALLBACK_MAX_TOTAL_CHARS_DOC_LONG = 2400
+FALLBACK_MAX_TOTAL_CHARS_DOC_SHORT = 420
+FALLBACK_MAX_TOTAL_CHARS_ARTICLE = 3200
 RESUME_FILENAME = "resume.json"
 LAST_RUN_STATS_FILENAME = "last_run_stats.json"
 DEFAULT_EMBEDDINGS_SOURCE = "full_text"
@@ -133,6 +141,72 @@ DEFAULT_ESTIMATE_SEC_PER_FILE = 50.0
 DEFAULT_ESTIMATE_SEC_PER_MB = 1.5
 EMBEDDINGS_SOURCE_NONE = "none"
 UNREADABLE_CATEGORY = "Unreadable"
+SUMMARY_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "are",
+    "as",
+    "at",
+    "be",
+    "by",
+    "for",
+    "from",
+    "has",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "their",
+    "this",
+    "to",
+    "was",
+    "were",
+    "will",
+    "with",
+    "using",
+    "use",
+    "used",
+    "can",
+    "may",
+    "not",
+    "which",
+    "than",
+    "we",
+    "you",
+    "your",
+    "our",
+    "these",
+    "those",
+    "such",
+    "also",
+    "per",
+    "via",
+    "within",
+    "across",
+    "about",
+    "after",
+    "before",
+    "if",
+    "when",
+    "while",
+    "do",
+    "does",
+    "did",
+    "done",
+    "no",
+    "yes",
+    "up",
+    "out",
+    "over",
+    "under",
+}
 
 USAGE_LOCK = threading.Lock()
 USAGE: Dict[str, int] = {"chat_in": 0, "chat_out": 0, "embed_in": 0}
@@ -623,6 +697,209 @@ def split_text(text: str, max_chars: int) -> List[str]:
         chunks.append(chunk)
         start = end
     return chunks
+
+
+def is_content_filter_error(exc: Exception) -> bool:
+    msg = str(exc or "").lower()
+    return (
+        "content_filter" in msg
+        or "responsibleaipolicyviolation" in msg
+        or ("chat api error 400" in msg and "filtered" in msg)
+    )
+
+
+def _summary_tokens(text: str) -> List[str]:
+    return [
+        tok
+        for tok in re.findall(r"[a-z0-9][a-z0-9\-]{2,}", normalize_text(text))
+        if tok not in SUMMARY_STOPWORDS and not tok.isdigit()
+    ]
+
+
+def _split_into_sentences(text: str) -> List[str]:
+    if not text:
+        return []
+    compact = re.sub(r"[ \t]+", " ", text)
+    compact = re.sub(r"\n{2,}", "\n", compact)
+    parts = re.split(r"(?<=[.!?])\s+|\n", compact)
+    out: List[str] = []
+    for part in parts:
+        s = re.sub(r"\s+", " ", (part or "").strip())
+        if not s:
+            continue
+        if len(s) > FALLBACK_MAX_SENTENCE_CHARS:
+            s = s[:FALLBACK_MAX_SENTENCE_CHARS].rstrip()
+        if len(s) < FALLBACK_MIN_SENTENCE_CHARS:
+            continue
+        out.append(s)
+    return out
+
+
+def _sentence_similarity(tokens_a: set[str], tokens_b: set[str]) -> float:
+    if not tokens_a or not tokens_b:
+        return 0.0
+    inter = len(tokens_a.intersection(tokens_b))
+    union = len(tokens_a.union(tokens_b))
+    if union == 0:
+        return 0.0
+    return inter / union
+
+
+def _extractive_summary_sentences(text: str, max_sentences: int, max_total_chars: int) -> List[str]:
+    sentences = _split_into_sentences(text)
+    if not sentences:
+        fallback = re.sub(r"\s+", " ", (text or "").strip())
+        if not fallback:
+            return []
+        return [fallback[:max_total_chars].rstrip()]
+
+    freq: Dict[str, int] = {}
+    sentence_tokens: List[set[str]] = []
+    for s in sentences:
+        toks = set(_summary_tokens(s))
+        sentence_tokens.append(toks)
+        for t in toks:
+            freq[t] = freq.get(t, 0) + 1
+
+    scored: List[Tuple[float, int, str]] = []
+    total = len(sentences)
+    for i, s in enumerate(sentences):
+        toks = sentence_tokens[i]
+        if toks:
+            density = sum(freq.get(t, 0) for t in toks) / max(1.0, len(toks) ** 0.5)
+        else:
+            density = 0.0
+        # Keep early context, but let high-information later lines win.
+        position_bonus = max(0.0, 1.0 - (i / max(1, total)))
+        score = density + (0.5 * position_bonus)
+        scored.append((score, i, s))
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    selected: List[Tuple[int, str]] = []
+    selected_tokens: List[set[str]] = []
+    char_count = 0
+    for _score, i, s in scored:
+        toks = sentence_tokens[i]
+        if any(_sentence_similarity(toks, prev) > 0.72 for prev in selected_tokens):
+            continue
+        projected = char_count + len(s) + (1 if selected else 0)
+        if projected > max_total_chars:
+            continue
+        selected.append((i, s))
+        selected_tokens.append(toks)
+        char_count = projected
+        if len(selected) >= max_sentences:
+            break
+
+    if not selected:
+        best = sorted(scored, key=lambda x: (-x[0], x[1]))[0][2]
+        return [best[:max_total_chars].rstrip()]
+
+    selected.sort(key=lambda x: x[0])
+    return [s for _, s in selected]
+
+
+def _extractive_summary_text(text: str, max_sentences: int, max_total_chars: int) -> str:
+    return " ".join(_extractive_summary_sentences(text, max_sentences, max_total_chars)).strip()
+
+
+def _extract_top_tags(text: str, max_tags: int = MAX_TAGS) -> List[str]:
+    freq: Dict[str, int] = {}
+    for tok in _summary_tokens(text):
+        if len(tok) < 4:
+            continue
+        freq[tok] = freq.get(tok, 0) + 1
+    if not freq:
+        return []
+    ranked = sorted(freq.items(), key=lambda kv: (-kv[1], kv[0]))
+    return [t for t, _n in ranked[:max_tags]]
+
+
+def _infer_category_from_text(text: str, categories: List[str]) -> str:
+    candidates = [c for c in categories if c and c not in ("Other", UNREADABLE_CATEGORY)]
+    if not candidates:
+        return "Other"
+
+    text_norm = normalize_text(text)[:120000]
+    text_tokens = _summary_tokens(text_norm)
+    token_freq: Dict[str, int] = {}
+    for tok in text_tokens:
+        token_freq[tok] = token_freq.get(tok, 0) + 1
+
+    best = ("Other", 0.0)
+    for cat in candidates:
+        cat_norm = normalize_text(cat)
+        if not cat_norm:
+            continue
+        score = 0.0
+        if cat_norm in text_norm:
+            score += 5.0
+        cat_tokens = [t for t in re.findall(r"[a-z0-9]+", cat_norm) if t not in SUMMARY_STOPWORDS]
+        for tok in cat_tokens:
+            score += min(3.0, float(token_freq.get(tok, 0)))
+        if score > best[1]:
+            best = (cat, score)
+    return best[0] if best[1] > 0 else "Other"
+
+
+def build_fallback_document_summary(text: str, categories: List[str]) -> Dict[str, Any]:
+    long_summary = _extractive_summary_text(
+        text,
+        max_sentences=FALLBACK_DOC_LONG_SENTENCES,
+        max_total_chars=FALLBACK_MAX_TOTAL_CHARS_DOC_LONG,
+    )
+    short_summary = _extractive_summary_text(
+        text,
+        max_sentences=FALLBACK_DOC_SHORT_SENTENCES,
+        max_total_chars=FALLBACK_MAX_TOTAL_CHARS_DOC_SHORT,
+    )
+    if not short_summary:
+        short_summary = long_summary[:FALLBACK_MAX_TOTAL_CHARS_DOC_SHORT].strip()
+    return {
+        "long_summary": long_summary,
+        "short_summary": short_summary,
+        "category": _infer_category_from_text(text, categories),
+        "tags": _extract_top_tags(text, MAX_TAGS),
+    }
+
+
+def build_fallback_article_summary(text: str) -> str:
+    return _extractive_summary_text(
+        text,
+        max_sentences=FALLBACK_ARTICLE_SENTENCES,
+        max_total_chars=FALLBACK_MAX_TOTAL_CHARS_ARTICLE,
+    )
+
+
+def summarize_document_safe(
+    cfg: AzureConfig,
+    text: str,
+    categories: List[str],
+    file_label: str,
+) -> Tuple[Dict[str, Any], bool]:
+    try:
+        return summarize_document(cfg, text, categories), False
+    except Exception as exc:
+        if not is_content_filter_error(exc):
+            raise
+        logging.warning(
+            "Content filter during document summary for %s; using local extractive fallback",
+            file_label,
+        )
+        return build_fallback_document_summary(text, categories), True
+
+
+def summarize_article_safe(cfg: AzureConfig, text: str, file_label: str) -> Tuple[str, bool]:
+    try:
+        return summarize_article(cfg, text), False
+    except Exception as exc:
+        if not is_content_filter_error(exc):
+            raise
+        logging.warning(
+            "Content filter during article summary for %s; using local extractive fallback",
+            file_label,
+        )
+        return build_fallback_article_summary(text), True
 
 
 def split_for_excel(text: str, max_chars: int = 32767) -> List[str]:
@@ -1902,7 +2179,7 @@ def edit_applications_gui(config_path: Path, app_config: Dict[str, List[str]], p
     refresh_list()
 
 
-def process_file(path: Path, ocrmypdf_enabled: bool) -> Tuple[str, List[Tuple[str, str]], str]:
+def process_file(path: Path, ocrmypdf_enabled: bool, articles_enabled: bool = True) -> Tuple[str, List[Tuple[str, str]], str]:
     ext = path.suffix.lower()
     try:
         if path.stat().st_size == 0:
@@ -1949,7 +2226,7 @@ def process_file(path: Path, ocrmypdf_enabled: bool) -> Tuple[str, List[Tuple[st
         return text, [], status
     if ext == ".pdf":
         text, pages, status = extract_text_pdf(path, ocrmypdf_enabled)
-        articles = split_pdf_into_articles(pages, source_label=str(path))
+        articles = split_pdf_into_articles(pages, source_label=str(path)) if articles_enabled else []
         return text, articles, status
     raise ValueError(f"Unsupported file type: {ext}")
 
@@ -2507,10 +2784,12 @@ def run_pipeline(
     include_full_text_output: bool = DEFAULT_INCLUDE_FULL_TEXT_OUTPUT,
     limit: Optional[int] = None,
     no_move: bool = False,
+    articles_enabled: bool = True,
     progress_cb: Optional[callable] = None,
 ) -> None:
     setup_logging(output_dir)
     logging.info("Starting pipeline")
+    logging.info("Article generation enabled: %s", articles_enabled)
 
     reset_usage()
 
@@ -2545,6 +2824,7 @@ def run_pipeline(
     article_texts: Dict[str, str] = {}
     extraction_statuses: Dict[str, str] = {}
     errors: List[Dict[str, str]] = []
+    doc_summary_fallback_ids: set[str] = set()
 
     iterable = tqdm(files, desc="Extracting") if tqdm else files
     for idx, path in enumerate(iterable, start=1):
@@ -2559,12 +2839,12 @@ def run_pipeline(
         doc_id_to_key[doc_id] = key
         if cached:
             text = cached.get("text", "")
-            pdf_articles = cached.get("articles_raw", [])
+            pdf_articles = cached.get("articles_raw", []) if articles_enabled else []
             extraction_status = cached.get("extraction_status", "no_text")
             cached["doc_id"] = doc_id
         else:
             try:
-                text, pdf_articles, extraction_status = process_file(path, ocrmypdf_enabled)
+                text, pdf_articles, extraction_status = process_file(path, ocrmypdf_enabled, articles_enabled)
             except Exception as exc:
                 logging.exception("Failed to extract %s: %s", path, exc)
                 errors.append({"stage": "extract", "file_name": path.name, "file_path": str(path), "error": str(exc)})
@@ -2604,29 +2884,30 @@ def run_pipeline(
         doc_items.append((doc_id, hsh, emb_vec))
 
         # Article handling (PDF only)
-        for a_idx, (title, body) in enumerate(pdf_articles, start=1):
-            article_id = f"{doc_id}-A{a_idx:03d}"
-            article_texts[article_id] = body
-            ahash = hash_text(normalize_text(body))
-            article_hashes[article_id] = ahash
-            article_id_to_key[article_id] = key
-            article_id_to_idx[article_id] = a_idx
-            aemb_vec: Optional[np.ndarray] = None
-            if embeddings_source == "full_text":
-                cached_aemb = None
-                if cached and "article_embeddings" in cached:
-                    cached_aemb = cached["article_embeddings"].get(str(a_idx))
-                if cached_aemb is not None:
-                    aemb_vec = np.array(cached_aemb, dtype=np.float32)
-                elif body.strip() and len(body) >= MIN_EMBEDDING_CHARS and not dry_run:
-                    try:
-                        aemb = call_azure_embeddings(cfg, body[:MAX_CHARS_PER_CHUNK])
-                        aemb_vec = np.array(aemb, dtype=np.float32)
-                        resume_files[key].setdefault("article_embeddings", {})[str(a_idx)] = aemb
-                    except Exception as exc:
-                        logging.exception("Article embedding failed for %s: %s", path, exc)
-                        errors.append({"stage": "article_embedding", "file_name": path.name, "file_path": str(path), "error": str(exc)})
-            article_items.append((article_id, ahash, aemb_vec))
+        if articles_enabled:
+            for a_idx, (_title, body) in enumerate(pdf_articles, start=1):
+                article_id = f"{doc_id}-A{a_idx:03d}"
+                article_texts[article_id] = body
+                ahash = hash_text(normalize_text(body))
+                article_hashes[article_id] = ahash
+                article_id_to_key[article_id] = key
+                article_id_to_idx[article_id] = a_idx
+                aemb_vec: Optional[np.ndarray] = None
+                if embeddings_source == "full_text":
+                    cached_aemb = None
+                    if cached and "article_embeddings" in cached:
+                        cached_aemb = cached["article_embeddings"].get(str(a_idx))
+                    if cached_aemb is not None:
+                        aemb_vec = np.array(cached_aemb, dtype=np.float32)
+                    elif body.strip() and len(body) >= MIN_EMBEDDING_CHARS and not dry_run:
+                        try:
+                            aemb = call_azure_embeddings(cfg, body[:MAX_CHARS_PER_CHUNK])
+                            aemb_vec = np.array(aemb, dtype=np.float32)
+                            resume_files[key].setdefault("article_embeddings", {})[str(a_idx)] = aemb
+                        except Exception as exc:
+                            logging.exception("Article embedding failed for %s: %s", path, exc)
+                            errors.append({"stage": "article_embedding", "file_name": path.name, "file_path": str(path), "error": str(exc)})
+                article_items.append((article_id, ahash, aemb_vec))
 
         if use_resume:
             resume["files"] = resume_files
@@ -2660,7 +2941,9 @@ def run_pipeline(
             summary = {}
         else:
             try:
-                summary = summarize_document(cfg, text, categories)
+                summary, used_fallback = summarize_document_safe(cfg, text, categories, path.name)
+                if used_fallback:
+                    doc_summary_fallback_ids.add(doc_id)
                 resume_files[key]["doc_summary"] = summary
             except Exception as exc:
                 logging.exception("Summarization failed for %s: %s", path, exc)
@@ -2701,6 +2984,8 @@ def run_pipeline(
             review_flags.append("low_text")
         if len(text) < MIN_EXTRACTED_CHARS:
             review_flags.append("short_text")
+        if doc_id in doc_summary_fallback_ids:
+            review_flags.append("summary_fallback_content_filter")
 
         docs.append(
             DocRecord(
@@ -2730,7 +3015,7 @@ def run_pipeline(
         # Only for PDF (others have no articles)
         article_list = []
         # We re-split to align with doc order
-        if path.suffix.lower() == ".pdf":
+        if articles_enabled and path.suffix.lower() == ".pdf":
             if cached and cached.get("articles_raw"):
                 article_list = cached.get("articles_raw", [])
             else:
@@ -2751,7 +3036,7 @@ def run_pipeline(
                 art_summary = ""
             else:
                 try:
-                    art_summary = summarize_article(cfg, body)
+                    art_summary, _ = summarize_article_safe(cfg, body, path.name)
                     resume_files[key].setdefault("article_summaries", {})[str(a_idx)] = art_summary
                 except Exception as exc:
                     logging.exception("Article summary failed for %s: %s", path, exc)
@@ -2970,9 +3255,11 @@ def run_pipeline_parallel(
     include_full_text_output: bool = DEFAULT_INCLUDE_FULL_TEXT_OUTPUT,
     limit: Optional[int] = None,
     no_move: bool = False,
+    articles_enabled: bool = True,
 ) -> None:
     setup_logging(output_dir)
     logging.info("Starting pipeline (parallel, workers=%s)", workers)
+    logging.info("Article generation enabled: %s", articles_enabled)
 
     reset_usage()
 
@@ -3018,12 +3305,12 @@ def run_pipeline_parallel(
             doc_id_to_key[doc_id] = key
         if cached:
             text = cached.get("text", "")
-            pdf_articles = cached.get("articles_raw", [])
+            pdf_articles = cached.get("articles_raw", []) if articles_enabled else []
             extraction_status = cached.get("extraction_status", "no_text")
             cached["doc_id"] = doc_id
         else:
             try:
-                text, pdf_articles, extraction_status = process_file(path, ocrmypdf_enabled)
+                text, pdf_articles, extraction_status = process_file(path, ocrmypdf_enabled, articles_enabled)
             except Exception as exc:
                 logging.exception("Failed to extract %s: %s", path, exc)
                 with errors_lock:
@@ -3060,26 +3347,27 @@ def run_pipeline_parallel(
                     logging.exception("Embedding failed for %s: %s", path, exc)
 
         art_embs: List[Tuple[str, Optional[np.ndarray]]] = []
-        for a_idx, (_title, body) in enumerate(pdf_articles, start=1):
-            article_id = f"{doc_id}-A{a_idx:03d}"
-            aemb_vec: Optional[np.ndarray] = None
-            if embeddings_source == "full_text":
-                cached_aemb = None
-                if cached and "article_embeddings" in cached:
-                    cached_aemb = cached["article_embeddings"].get(str(a_idx))
-                if cached_aemb is not None:
-                    aemb_vec = np.array(cached_aemb, dtype=np.float32)
-                elif body.strip() and len(body) >= MIN_EMBEDDING_CHARS and not dry_run:
-                    try:
-                        aemb = call_azure_embeddings(cfg, body[:MAX_CHARS_PER_CHUNK])
-                        aemb_vec = np.array(aemb, dtype=np.float32)
-                        with state_lock:
-                            resume_files[key].setdefault("article_embeddings", {})[str(a_idx)] = aemb
-                    except Exception as exc:
-                        logging.exception("Article embedding failed for %s: %s", path, exc)
-                        with errors_lock:
-                            errors.append({"stage": "article_embedding", "file_name": path.name, "file_path": str(path), "error": str(exc)})
-            art_embs.append((article_id, aemb_vec))
+        if articles_enabled:
+            for a_idx, (_title, body) in enumerate(pdf_articles, start=1):
+                article_id = f"{doc_id}-A{a_idx:03d}"
+                aemb_vec: Optional[np.ndarray] = None
+                if embeddings_source == "full_text":
+                    cached_aemb = None
+                    if cached and "article_embeddings" in cached:
+                        cached_aemb = cached["article_embeddings"].get(str(a_idx))
+                    if cached_aemb is not None:
+                        aemb_vec = np.array(cached_aemb, dtype=np.float32)
+                    elif body.strip() and len(body) >= MIN_EMBEDDING_CHARS and not dry_run:
+                        try:
+                            aemb = call_azure_embeddings(cfg, body[:MAX_CHARS_PER_CHUNK])
+                            aemb_vec = np.array(aemb, dtype=np.float32)
+                            with state_lock:
+                                resume_files[key].setdefault("article_embeddings", {})[str(a_idx)] = aemb
+                        except Exception as exc:
+                            logging.exception("Article embedding failed for %s: %s", path, exc)
+                            with errors_lock:
+                                errors.append({"stage": "article_embedding", "file_name": path.name, "file_path": str(path), "error": str(exc)})
+                art_embs.append((article_id, aemb_vec))
 
         if use_resume:
             with state_lock:
@@ -3106,14 +3394,15 @@ def run_pipeline_parallel(
             doc_hashes[doc_id] = hsh
             doc_items.append((doc_id, hsh, emb_vec))
             articles_by_doc[doc_id] = pdf_articles
-            for a_idx, ((article_id, aemb_vec), (_title, body)) in enumerate(zip(art_embs, pdf_articles), start=1):
-                article_texts[article_id] = body
-                key = file_key(path)
-                article_id_to_key[article_id] = key
-                article_id_to_idx[article_id] = a_idx
-                ahash = hash_text(normalize_text(body))
-                article_hashes[article_id] = ahash
-                article_items.append((article_id, ahash, aemb_vec))
+            if articles_enabled:
+                for a_idx, ((article_id, aemb_vec), (_title, body)) in enumerate(zip(art_embs, pdf_articles), start=1):
+                    article_texts[article_id] = body
+                    key = file_key(path)
+                    article_id_to_key[article_id] = key
+                    article_id_to_idx[article_id] = a_idx
+                    ahash = hash_text(normalize_text(body))
+                    article_hashes[article_id] = ahash
+                    article_items.append((article_id, ahash, aemb_vec))
 
     if embeddings_source == "full_text":
         doc_dup_of, doc_dup_score, doc_dup_group = detect_duplicates(doc_items, DUPLICATE_THRESHOLD)
@@ -3128,7 +3417,7 @@ def run_pipeline_parallel(
     docs: List[DocRecord] = []
     articles: List[ArticleRecord] = []
 
-    def summarize_doc(idx_path: Tuple[int, Path]) -> Tuple[int, Path, Dict[str, Any]]:
+    def summarize_doc(idx_path: Tuple[int, Path]) -> Tuple[int, Path, Dict[str, Any], bool]:
         idx, path = idx_path
         key = file_key(path)
         with state_lock:
@@ -3144,7 +3433,7 @@ def run_pipeline_parallel(
             summary = {}
         else:
             try:
-                summary = summarize_document(cfg, text, categories)
+                summary, used_fallback = summarize_document_safe(cfg, text, categories, path.name)
                 with state_lock:
                     resume_files[key]["doc_summary"] = summary
             except Exception as exc:
@@ -3152,18 +3441,22 @@ def run_pipeline_parallel(
                 with errors_lock:
                     errors.append({"stage": "summarize", "file_name": path.name, "file_path": str(path), "error": str(exc)})
                 summary = {}
+                used_fallback = False
+        if dry_run or not text.strip() or low_text or cached.get("doc_summary"):
+            used_fallback = False
         if use_resume:
             with state_lock:
                 resume["files"] = resume_files
                 save_resume(output_dir, resume)
-        return idx, path, summary
+        return idx, path, summary, used_fallback
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [ex.submit(summarize_doc, (i, p)) for i, p in enumerate(files, start=1)]
         summaries: Dict[str, Dict[str, Any]] = {}
+        summary_fallback_flags: Dict[str, bool] = {}
         for fut in as_completed(futures):
             try:
-                idx, path, summary = fut.result()
+                idx, path, summary, used_fallback = fut.result()
             except Exception as exc:
                 logging.exception("Summarize worker failed: %s", exc)
                 with errors_lock:
@@ -3172,6 +3465,7 @@ def run_pipeline_parallel(
             with state_lock:
                 doc_id = resume_files.get(file_key(path), {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
             summaries[doc_id] = summary
+            summary_fallback_flags[doc_id] = used_fallback
 
     for idx, path in enumerate(files, start=1):
         key = file_key(path)
@@ -3213,6 +3507,8 @@ def run_pipeline_parallel(
             review_flags.append("low_text")
         if len(text) < MIN_EXTRACTED_CHARS:
             review_flags.append("short_text")
+        if summary_fallback_flags.get(doc_id, False):
+            review_flags.append("summary_fallback_content_filter")
 
         docs.append(
             DocRecord(
@@ -3236,40 +3532,41 @@ def run_pipeline_parallel(
             )
         )
 
-        article_list = articles_by_doc.get(doc_id, [])
-        for a_idx, (title, body) in enumerate(article_list, start=1):
-            article_id = f"{doc_id}-A{a_idx:03d}"
-            cached = resume_files.get(key, {})
-            cached_summary = None
-            if cached and "article_summaries" in cached:
-                cached_summary = cached["article_summaries"].get(str(a_idx))
-            if cached_summary is not None and not dry_run:
-                art_summary = cached_summary
-            elif dry_run or not body.strip():
-                art_summary = ""
-            else:
-                try:
-                    art_summary = summarize_article(cfg, body)
-                    resume_files[key].setdefault("article_summaries", {})[str(a_idx)] = art_summary
-                except Exception as exc:
-                    logging.exception("Article summary failed for %s: %s", path, exc)
-                    with errors_lock:
-                        errors.append({"stage": "article_summarize", "file_name": path.name, "file_path": str(path), "error": str(exc)})
+        if articles_enabled:
+            article_list = articles_by_doc.get(doc_id, [])
+            for a_idx, (title, body) in enumerate(article_list, start=1):
+                article_id = f"{doc_id}-A{a_idx:03d}"
+                cached = resume_files.get(key, {})
+                cached_summary = None
+                if cached and "article_summaries" in cached:
+                    cached_summary = cached["article_summaries"].get(str(a_idx))
+                if cached_summary is not None and not dry_run:
+                    art_summary = cached_summary
+                elif dry_run or not body.strip():
                     art_summary = ""
-            articles.append(
-                ArticleRecord(
-                    doc_id=doc_id,
-                    file_key=key,
-                    file_name=path.name,
-                    file_path=str(path),
-                    article_index=a_idx,
-                    article_title=title,
-                    article_summary=art_summary,
-                    duplicate_of=art_dup_of.get(article_id, ""),
-                    duplicate_score=art_dup_score.get(article_id),
-                    duplicate_group_id=art_dup_group.get(article_id, ""),
+                else:
+                    try:
+                        art_summary, _ = summarize_article_safe(cfg, body, path.name)
+                        resume_files[key].setdefault("article_summaries", {})[str(a_idx)] = art_summary
+                    except Exception as exc:
+                        logging.exception("Article summary failed for %s: %s", path, exc)
+                        with errors_lock:
+                            errors.append({"stage": "article_summarize", "file_name": path.name, "file_path": str(path), "error": str(exc)})
+                        art_summary = ""
+                articles.append(
+                    ArticleRecord(
+                        doc_id=doc_id,
+                        file_key=key,
+                        file_name=path.name,
+                        file_path=str(path),
+                        article_index=a_idx,
+                        article_title=title,
+                        article_summary=art_summary,
+                        duplicate_of=art_dup_of.get(article_id, ""),
+                        duplicate_score=art_dup_score.get(article_id),
+                        duplicate_group_id=art_dup_group.get(article_id, ""),
+                    )
                 )
-            )
 
     if embeddings_source == "summary":
         doc_items2: List[Tuple[str, str, Optional[np.ndarray]]] = []
@@ -3467,6 +3764,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-embeddings", action="store_true", help="Test embeddings endpoint and exit")
     parser.add_argument("--test-chat", action="store_true", help="Test chat endpoint and exit")
     parser.add_argument("--workers", type=int, default=1, help="Number of workers for parallel CLI processing (default: 1)")
+    parser.add_argument("--no-articles", action="store_true", help="Disable PDF article splitting/summarization and keep article outputs empty")
     parser.add_argument("--category-path-map", help="Path to category_path_map.json for import Path mapping")
     parser.add_argument(
         "--include-full-text-output",
@@ -3631,6 +3929,7 @@ def main() -> int:
                 args.include_full_text_output,
                 args.limit,
                 args.no_move,
+                not args.no_articles,
                 progress_cb,
             )
             q.put(("DONE", 1, 1))
@@ -3701,6 +4000,7 @@ def main() -> int:
                 args.include_full_text_output,
                 args.limit,
                 args.no_move,
+                not args.no_articles,
             )
         else:
             run_pipeline(
@@ -3718,6 +4018,7 @@ def main() -> int:
                 args.include_full_text_output,
                 args.limit,
                 args.no_move,
+                not args.no_articles,
             )
     return 0
 

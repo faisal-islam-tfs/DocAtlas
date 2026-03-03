@@ -16,6 +16,8 @@ Summarization & Classification (LLM)
 - Category assignment from your list
 - Tag generation (deduped + capped)
 - Article summaries for PDFs
+- If chat returns `content_filter`, a local extractive fallback summary is generated
+- Documents using that fallback are flagged with `summary_fallback_content_filter`
 
 PDF Article Handling
 - Splits PDFs into articles using conservative strong-heading heuristics
@@ -57,6 +59,7 @@ GUI
 CLI
 - Full CLI support for input/output/app/categories
 - --workers N for parallel CLI processing (default 1)
+- --no-articles to disable PDF article split/summarize/dedup
 - --category-path-map to supply import path mapping JSON
 - Automatic pre-run validation ensures applications/categories in applications.json and category_path_map.json stay aligned
 - --include-full-text-output to re-enable full-text workbook
