@@ -2219,6 +2219,67 @@ def get_run_mode_gui() -> Optional[bool]:
     return result[0] if result else True
 
 
+def get_articles_mode_gui() -> bool:
+    if tk is None:
+        return False
+    root = tk.Tk()
+    root.title("DocAtlas - Article Generation")
+    root.geometry("560x250")
+    apply_theme(root)
+
+    var = tk.BooleanVar(value=False)
+    container = tk.Frame(root, bg=THEME["bg"])
+    container.pack(fill=tk.BOTH, expand=True, padx=16, pady=16)
+
+    label = tk.Label(container, text="Article Generation", bg=THEME["bg"], fg=THEME["fg"], font=FONT_HEADER)
+    label.pack(anchor="w", pady=(0, 6))
+    sub = tk.Label(
+        container,
+        text="Generate per-article rows for PDFs with clear multi-article structure.",
+        bg=THEME["bg"],
+        fg=THEME["muted"],
+        font=FONT_SMALL,
+    )
+    sub.pack(anchor="w", pady=(0, 12))
+
+    tk.Checkbutton(
+        container,
+        text="Enable article generation (PDF-only)",
+        variable=var,
+        bg=THEME["bg"],
+        fg=THEME["fg"],
+        font=FONT_LABEL,
+    ).pack(anchor="w", pady=6)
+
+    result: List[bool] = []
+
+    def on_ok() -> None:
+        result.append(bool(var.get()))
+        root.destroy()
+
+    def on_close() -> None:
+        result.append(False)
+        root.destroy()
+
+    root.protocol("WM_DELETE_WINDOW", on_close)
+
+    btn_frame = tk.Frame(container, bg=THEME["bg"])
+    btn_frame.pack(pady=12, anchor="e", fill=tk.X)
+    tk.Button(
+        btn_frame,
+        text="OK",
+        command=on_ok,
+        width=12,
+        bg=THEME["accent"],
+        fg="#ffffff",
+        relief=tk.FLAT,
+        height=1,
+        font=FONT_BUTTON,
+    ).pack(side=tk.RIGHT, padx=8, ipady=4)
+    root.mainloop()
+    return result[0] if result else False
+
+
 def edit_applications_gui(config_path: Path, app_config: Dict[str, List[str]], parent: tk.Tk) -> None:
     if tk is None:
         return
@@ -2388,6 +2449,7 @@ def write_excels(
     append_excel: bool,
     category_path_map: Dict[str, Any],
     include_full_text_output: bool = DEFAULT_INCLUDE_FULL_TEXT_OUTPUT,
+    articles_enabled: bool = False,
 ) -> Tuple[Path, Optional[Path], Path]:
     app_slug = sanitize_folder(app_name or "uncategorized")
     peers_path = out_dir / f"{app_slug}__docatlas_summaries.xlsx"
@@ -2475,31 +2537,32 @@ def write_excels(
     new_doc_ids = {d.doc_id for d in new_docs}
     doc_by_id = {d.doc_id: d for d in docs}
     article_rows: List[Dict[str, Any]] = []
-    for a in articles:
-        if append_excel and a.doc_id not in new_doc_ids:
-            continue
-        parent_doc = doc_by_id.get(a.doc_id)
-        article_rows.append(
-            {
-                "Category": parent_doc.category if parent_doc else "",
-                "FilePath": a.file_path,
-                "FileName": a.file_name,
-                "ParentDocID": a.doc_id,
-                "ArticleIndex": a.article_index,
-                "ArticleTitle": a.article_title,
-                "ArticleSummary": a.article_summary,
-                "DuplicateClusterID": a.duplicate_group_id,
-                "DupScore": float(a.duplicate_score) if a.duplicate_score is not None else 0.0,
-                "DuplicateOf": a.duplicate_of,
-            }
+    if articles_enabled:
+        for a in articles:
+            if append_excel and a.doc_id not in new_doc_ids:
+                continue
+            parent_doc = doc_by_id.get(a.doc_id)
+            article_rows.append(
+                {
+                    "Category": parent_doc.category if parent_doc else "",
+                    "FilePath": a.file_path,
+                    "FileName": a.file_name,
+                    "ParentDocID": a.doc_id,
+                    "ArticleIndex": a.article_index,
+                    "ArticleTitle": a.article_title,
+                    "ArticleSummary": a.article_summary,
+                    "DuplicateClusterID": a.duplicate_group_id,
+                    "DupScore": float(a.duplicate_score) if a.duplicate_score is not None else 0.0,
+                    "DuplicateOf": a.duplicate_of,
+                }
+            )
+        article_rows.sort(
+            key=lambda r: (
+                str(r.get("Category", "")).lower(),
+                str(r.get("FileName", "")).lower(),
+                int(r.get("ArticleIndex", 0)),
+            )
         )
-    article_rows.sort(
-        key=lambda r: (
-            str(r.get("Category", "")).lower(),
-            str(r.get("FileName", "")).lower(),
-            int(r.get("ArticleIndex", 0)),
-        )
-    )
 
     docs_columns = [
         "Category",
@@ -2537,12 +2600,14 @@ def write_excels(
 
     docs_df = sanitize_excel_df(pd.DataFrame(docs_rows, columns=docs_columns))
     dups_df = sanitize_excel_df(pd.DataFrame(dup_rows, columns=dups_columns))
-    articles_df = sanitize_excel_df(pd.DataFrame(article_rows, columns=articles_columns))
+    articles_df: Optional[pd.DataFrame] = None
+    if articles_enabled:
+        articles_df = sanitize_excel_df(pd.DataFrame(article_rows, columns=articles_columns))
     if append_excel and existing_docs_df is not None:
         docs_df = pd.concat([existing_docs_df, docs_df], ignore_index=True)
     if append_excel and existing_dups_df is not None:
         dups_df = pd.concat([existing_dups_df, dups_df], ignore_index=True)
-    if append_excel and existing_articles_df is not None:
+    if articles_enabled and append_excel and existing_articles_df is not None and articles_df is not None:
         articles_df = pd.concat([existing_articles_df, articles_df], ignore_index=True)
     if not dups_df.empty:
         if "DupScore" in dups_df.columns:
@@ -2552,10 +2617,17 @@ def write_excels(
             ascending = [True if c != "DupScore" else False for c in sort_cols]
             dups_df = dups_df.sort_values(sort_cols, ascending=ascending, kind="mergesort", na_position="last").reset_index(drop=True)
 
+    articles_sheet_status = "skipped"
     with pd.ExcelWriter(peers_path, engine="openpyxl") as writer:
         docs_df.to_excel(writer, index=False, sheet_name="Documents")
         dups_df.to_excel(writer, index=False, sheet_name="Duplicates")
-        articles_df.to_excel(writer, index=False, sheet_name="Articles")
+        if articles_enabled and articles_df is not None:
+            articles_df.to_excel(writer, index=False, sheet_name="Articles")
+            articles_sheet_status = "written"
+        elif append_excel and existing_articles_df is not None:
+            existing_articles_df.to_excel(writer, index=False, sheet_name="Articles")
+            articles_sheet_status = "preserved"
+    logging.info("Articles sheet in summaries workbook: %s", articles_sheet_status)
 
     text_by_doc_id = {str(r.get("doc_id", "")): str(r.get("full_text", "") or "") for r in full_text_rows}
     import_rows: List[Dict[str, Any]] = []
@@ -2651,7 +2723,8 @@ def write_excels(
 
         format_sheet(peers_path, "Documents", ["LongSummary", "ShortSummary", "FilePath"])
         format_sheet(peers_path, "Duplicates", ["FilePath"])
-        format_sheet(peers_path, "Articles", ["FilePath", "ArticleTitle", "ArticleSummary"])
+        if articles_sheet_status in ("written", "preserved"):
+            format_sheet(peers_path, "Articles", ["FilePath", "ArticleTitle", "ArticleSummary"])
         format_sheet(import_path, "import", ["Path", "Title", "Content", "Summary", "Tags", "Attachments", "ArticleType"])
         if include_full_text_output and full_text_path is not None:
             format_sheet(full_text_path, "FullText", ["short_summary", "long_summary", "full_text"])
@@ -2932,12 +3005,12 @@ def run_pipeline(
     include_full_text_output: bool = DEFAULT_INCLUDE_FULL_TEXT_OUTPUT,
     limit: Optional[int] = None,
     no_move: bool = False,
-    articles_enabled: bool = True,
+    articles_enabled: bool = False,
     progress_cb: Optional[callable] = None,
 ) -> None:
     setup_logging(output_dir)
     logging.info("Starting pipeline")
-    logging.info("Article generation enabled: %s", articles_enabled)
+    logging.info("Article generation enabled: %s", str(articles_enabled).lower())
 
     reset_usage()
 
@@ -3340,6 +3413,7 @@ def run_pipeline(
             append_excel,
             category_path_map,
             include_full_text_output,
+            articles_enabled,
         )
         logging.info("Wrote summaries workbook: %s", peers_path)
         logging.info("Wrote import workbook: %s", import_path)
@@ -3403,11 +3477,11 @@ def run_pipeline_parallel(
     include_full_text_output: bool = DEFAULT_INCLUDE_FULL_TEXT_OUTPUT,
     limit: Optional[int] = None,
     no_move: bool = False,
-    articles_enabled: bool = True,
+    articles_enabled: bool = False,
 ) -> None:
     setup_logging(output_dir)
     logging.info("Starting pipeline (parallel, workers=%s)", workers)
-    logging.info("Article generation enabled: %s", articles_enabled)
+    logging.info("Article generation enabled: %s", str(articles_enabled).lower())
 
     reset_usage()
 
@@ -3846,6 +3920,7 @@ def run_pipeline_parallel(
             append_excel,
             category_path_map,
             include_full_text_output,
+            articles_enabled,
         )
         logging.info("Wrote summaries workbook: %s", peers_path)
         logging.info("Wrote import workbook: %s", import_path)
@@ -3912,7 +3987,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--test-embeddings", action="store_true", help="Test embeddings endpoint and exit")
     parser.add_argument("--test-chat", action="store_true", help="Test chat endpoint and exit")
     parser.add_argument("--workers", type=int, default=1, help="Number of workers for parallel CLI processing (default: 1)")
-    parser.add_argument("--no-articles", action="store_true", help="Disable PDF article splitting/summarization and keep article outputs empty")
+    parser.add_argument("--articles", action="store_true", help="Enable PDF article splitting/summarization and write Articles sheet")
+    parser.add_argument("--no-articles", action="store_true", help="Deprecated alias; article generation is disabled by default")
     parser.add_argument("--category-path-map", help="Path to category_path_map.json for import Path mapping")
     parser.add_argument(
         "--include-full-text-output",
@@ -3997,6 +4073,9 @@ def main() -> int:
             raise ValueError("Provide --categories or a valid --app from config")
         ocrmypdf_enabled = not args.no_ocrmypdf
         embeddings_source = resolve_embeddings_source(args.embeddings_source)
+        articles_enabled = bool(args.articles)
+        if args.no_articles:
+            logging.warning("--no-articles is deprecated and now the default behavior; use --articles to enable article generation.")
     else:
         input_dir, output_dir = pick_directories_gui()
         categories, app_name = get_categories_gui(app_config, config_path)
@@ -4007,6 +4086,7 @@ def main() -> int:
             return 0
         if gui_charter_mode:
             args.no_move = True
+        articles_enabled = get_articles_mode_gui()
 
     cfg = azure_config_from_env(require_key=(not args.dry_run and not is_gui_flow))
     if not args.dry_run:
@@ -4077,7 +4157,7 @@ def main() -> int:
                 args.include_full_text_output,
                 args.limit,
                 args.no_move,
-                not args.no_articles,
+                articles_enabled,
                 progress_cb,
             )
             q.put(("DONE", 1, 1))
@@ -4148,7 +4228,7 @@ def main() -> int:
                 args.include_full_text_output,
                 args.limit,
                 args.no_move,
-                not args.no_articles,
+                articles_enabled,
             )
         else:
             run_pipeline(
@@ -4166,7 +4246,7 @@ def main() -> int:
                 args.include_full_text_output,
                 args.limit,
                 args.no_move,
-                not args.no_articles,
+                articles_enabled,
             )
     return 0
 

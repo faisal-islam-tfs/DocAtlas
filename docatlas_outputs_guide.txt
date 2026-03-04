@@ -8,7 +8,7 @@ DocAtlas writes:
 1) <app_or_uncategorized>__docatlas_summaries.xlsx
    - Documents
    - Duplicates
-   - Articles
+   - Articles (conditional; see Articles sheet behavior below)
 
 2) <app_or_uncategorized>__docatlas_import.xlsx
    - import
@@ -42,9 +42,16 @@ Import sheet mapping behavior
 
 Articles sheet behavior
 -----------------------
-- Article splitting applies to PDFs only.
-- Splitting is conservative: multiple article rows are created only with strong structural evidence.
-- If a PDF appears to be a single article, one article row is written for that document.
+- Default is no-article mode: article generation is disabled unless explicitly enabled.
+- Enable in CLI with `--articles` or via GUI article toggle.
+- New/overwrite runs in no-article mode: no `Articles` sheet is created.
+- Append runs in no-article mode:
+  - if `Articles` already exists, it is preserved unchanged
+  - if `Articles` does not exist, it is not created
+- When article generation is enabled:
+  - article splitting applies to PDFs only
+  - splitting is conservative: multiple rows are created only with strong structural evidence
+  - single-article PDFs produce one article row
 
 File move behavior
 ------------------

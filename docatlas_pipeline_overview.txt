@@ -20,10 +20,11 @@
   - OCR does not use the LLM; it is a separate local process
 
 3) PDF article splitting
-- PDFs are split into articles using conservative strong-heading heuristics
+- Disabled by default
+- Enable with `--articles` (CLI) or GUI article toggle
+- When enabled, PDFs are split into articles using conservative strong-heading heuristics
 - If structural evidence is weak/ambiguous, the PDF is treated as one article
-- Article list used for per-article summaries
-- Optional: `--no-articles` disables article splitting/summaries/dedup entirely
+- Article list used for per-article summaries only when enabled
 
 4) Summarization + classification
 - Per document:
@@ -47,7 +48,9 @@
 - *_docatlas_summaries.xlsx
   - Documents sheet (compact per-document review fields)
   - Duplicates sheet (duplicate-cluster candidates sorted for triage)
-  - Articles sheet (human-readable article summaries with parent document linkage)
+  - Articles sheet is conditional:
+    - written only when article generation is enabled
+    - in append mode, existing `Articles` sheet is preserved unchanged when article generation is disabled
 - *_docatlas_import.xlsx (standalone import sheet: Id, Path, Title, Content, Summary, Tags, Attachments, AutoPublish, ArticleType)
 - *_docatlas_full_text.xlsx (disabled by default; opt-in via --include-full-text-output)
 - summary_report.txt (counts, extraction status, token estimates, no-text list, file type breakdown, category %s, OCR usage, duplicate group stats, doc length stats, per-file errors)

@@ -15,15 +15,16 @@ Summarization & Classification (LLM)
 - Long summary (5â€“7 sentences)
 - Category assignment from your list
 - Tag generation (deduped + capped)
-- Article summaries for PDFs
+- Optional article summaries for PDFs (disabled by default)
 - If chat returns `content_filter`, a local extractive fallback summary is generated
 - Documents using that fallback are flagged with `summary_fallback_content_filter`
 - Final document category is selected deterministically from extracted text using tuned keyword/phrase rules
 
 PDF Article Handling
-- Splits PDFs into articles using conservative strong-heading heuristics
-- Defaults to one article when structure is weak/ambiguous to avoid over-splitting
-- Stores article summaries separately
+- Disabled by default (opt-in via `--articles` in CLI or GUI toggle)
+- When enabled, splits PDFs into articles using conservative strong-heading heuristics
+- If structure is weak/ambiguous, defaults to one article to avoid over-splitting
+- Stores article summaries separately when enabled
 
 Duplicate Detection
 - Exact duplicates: SHA-256 hash
@@ -34,7 +35,7 @@ Outputs
 - *_docatlas_summaries.xlsx
   - Documents (compact per-document review)
   - Duplicates (cluster-focused duplicate review)
-  - Articles (human-readable per-article summaries)
+  - Articles (conditional: written only when article generation is enabled; append mode preserves existing sheet)
 - *_docatlas_import.xlsx (standalone import sheet for downstream KB import)
 - *_docatlas_full_text.xlsx (disabled by default; opt-in with --include-full-text-output)
 - summary_report.txt
@@ -60,7 +61,8 @@ GUI
 CLI
 - Full CLI support for input/output/app/categories
 - --workers N for parallel CLI processing (default 1)
-- --no-articles to disable PDF article split/summarize/dedup
+- --articles to enable PDF article split/summarize/dedup (default is disabled)
+- --no-articles kept as deprecated compatibility alias
 - --category-path-map to supply import path mapping JSON
 - Automatic pre-run validation ensures applications/categories in applications.json and category_path_map.json stay aligned
 - --include-full-text-output to re-enable full-text workbook

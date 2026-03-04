@@ -42,8 +42,9 @@ Notes:
       `DuplicateClusterID`
   - `Duplicates` sheet:
     - duplicate-cluster members only, sorted by category/cluster/score
-  - `Articles` sheet:
-    - human-readable PDF article summaries with parent doc linkage
+  - `Articles` sheet (conditional):
+    - written only when article generation is enabled (`--articles` in CLI or GUI toggle)
+    - in append mode, an already-existing `Articles` sheet is preserved unchanged even if article generation is off
 - `{application}__docatlas_import.xlsx` (falls back to `uncategorized__docatlas_import.xlsx`)
   - `import` sheet:
     - `Id`, `Path`, `Title`, `Content`, `Summary`, `Tags`, `Attachments`, `AutoPublish`, `ArticleType`
@@ -219,7 +220,8 @@ python docatlas.py --config "C:\path\to\applications.json" --input "C:\path\to\d
 - `--no-resume`: disable resume cache
 - `--no-ocrmypdf`: disable OCRmyPDF and use Tesseract fallback
 - `--workers N`: run CLI processing in parallel with N workers (default: `1`; GUI path remains single-worker)
-- `--no-articles`: disable PDF article generation (no article split/summarize/dedup; `Articles` sheet remains empty)
+- `--articles`: enable PDF article generation (disabled by default)
+- `--no-articles`: deprecated compatibility alias (default is already no-article mode)
 - `--category-path-map`: path to `category_path_map.json` for import `Path` mapping
 - `--include-full-text-output`: write full-text workbook (disabled by default)
 - `--embeddings-source summary|full_text|none`: choose embeddings input (default: `full_text`)
@@ -256,8 +258,10 @@ python docatlas.py --input "C:\path\to\docs" --output "C:\path\to\out" --app "Se
 - Duplicate clusters are moved to `<category>_Duplicate/<DuplicateClusterID>/` (including canonical + duplicate members).
 - Each `<category>_Duplicate` folder also gets `duplicate_groups_overview.xlsx` for manual assignment/review.
 - Import output is written as a standalone workbook: `<app>__docatlas_import.xlsx`.
-- PDF article splitting uses a conservative strong-heading heuristic.
-- Default is conservative: if structure is ambiguous, one article is created for the document.
+- PDF article splitting is optional and disabled by default.
+- When enabled, splitting uses a conservative strong-heading heuristic.
+- In no-article mode, new/overwrite runs do not create an `Articles` sheet.
+- In append mode, an existing `Articles` sheet is preserved unchanged.
 - Resume cache stored as `resume.json` in the output folder.
 - OCR fallback for PDFs: if extracted text is too short, OCRmyPDF runs non-forced first, then forced pass only if still low-text, then Tesseract fallback.
 - If OCR is enabled, embedded images inside `.docx` and `.pptx` are also OCR-processed.
