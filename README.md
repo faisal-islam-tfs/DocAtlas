@@ -140,6 +140,9 @@ If the chat endpoint returns a `content_filter` error for a document/article, Do
 a local deterministic extractive fallback summary instead of leaving that summary empty. Documents
 that used this fallback get `summary_fallback_content_filter` in `ReviewFlag`.
 
+Final document category selection is deterministic and rule-based from extracted text
+(keyword/phrase scoring with stable tie-break), to reduce run-to-run category drift.
+
 In the GUI flow, if keys are missing, DocAtlas will prompt separately for the **LLM key** and the **embeddings key**.
 
 ## OCR Dependencies (Windows)

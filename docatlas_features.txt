@@ -18,6 +18,7 @@ Summarization & Classification (LLM)
 - Article summaries for PDFs
 - If chat returns `content_filter`, a local extractive fallback summary is generated
 - Documents using that fallback are flagged with `summary_fallback_content_filter`
+- Final document category is selected deterministically from extracted text using tuned keyword/phrase rules
 
 PDF Article Handling
 - Splits PDFs into articles using conservative strong-heading heuristics

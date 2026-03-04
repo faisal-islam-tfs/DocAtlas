@@ -208,6 +208,118 @@ SUMMARY_STOPWORDS = {
     "under",
 }
 
+# Deterministic category hints tuned for qPCR-style corpora.
+# Keys are normalized category names.
+CATEGORY_HINT_PHRASES: Dict[str, List[Tuple[str, float]]] = {
+    "assay design": [
+        ("assay design", 0.8),
+        ("design tool", 2.5),
+        ("custom assay", 1.8),
+        ("mirbase", 2.5),
+        ("target sequence", 1.8),
+        ("context sequence", 1.6),
+        ("amplicon", 1.4),
+        ("cadt", 2.5),
+    ],
+    "copy number variation": [
+        ("copy number", 4.0),
+        ("cnv", 4.0),
+        ("copycaller", 4.0),
+        ("calibrator", 2.5),
+        ("reference assay", 2.5),
+        ("z-score", 2.0),
+        ("delta ct", 1.8),
+        ("ddct", 1.8),
+    ],
+    "gene expression": [
+        ("gene expression", 5.0),
+        ("expression assay", 3.2),
+        ("taqman gene expression", 4.0),
+        ("mirna", 2.2),
+        ("taqman mirna", 3.0),
+        ("relative quantification", 3.0),
+        ("ddct", 2.5),
+        ("delta delta ct", 2.5),
+        ("endogenous control", 3.0),
+        ("housekeeping gene", 2.5),
+        ("reference gene", 2.2),
+        ("transcript", 2.0),
+    ],
+    "stepone": [
+        ("stepone", 4.0),
+        ("steponeplus", 4.0),
+    ],
+    "snp genotyping": [
+        ("snp", 3.2),
+        ("genotyping", 3.2),
+        ("genotype", 2.8),
+        ("allelic discrimination", 3.0),
+        ("genotyper", 3.0),
+        ("allele", 2.0),
+        ("polymorphism", 2.0),
+        ("cluster plot", 2.0),
+    ],
+    "seqstudio": [
+        ("seqstudio", 4.0),
+        ("sanger", 2.5),
+        ("capillary electrophoresis", 3.0),
+    ],
+    "reagents": [
+        ("reagent", 1.0),
+        ("master mix", 1.2),
+        ("enzyme", 0.8),
+        ("buffer", 0.7),
+        ("kit", 0.5),
+    ],
+    "instrumentation": [
+        ("instrument", 2.8),
+        ("real-time pcr system", 3.0),
+        ("thermal cycler", 2.8),
+        ("quantstudio", 3.0),
+        ("platform", 1.6),
+    ],
+    "data analysis": [
+        ("data analysis", 3.2),
+        ("software", 2.0),
+        ("threshold", 1.5),
+        ("baseline", 1.4),
+        ("normalization", 1.6),
+    ],
+    "qc": [
+        ("quality control", 4.0),
+        ("qc", 3.5),
+        ("certificate of analysis", 4.0),
+        ("coa", 3.0),
+        ("specification", 1.8),
+        ("lot release", 2.0),
+    ],
+    "troubleshooting": [
+        ("troubleshooting", 4.0),
+        ("troubleshoot", 3.6),
+        ("low signal", 2.0),
+        ("no amplification", 2.2),
+    ],
+}
+
+CATEGORY_GENERIC_TOKENS = {
+    "assay",
+    "design",
+    "data",
+    "analysis",
+    "quality",
+    "control",
+    "reagents",
+    "instrumentation",
+    "troubleshooting",
+    "copy",
+    "number",
+    "variation",
+    "gene",
+    "expression",
+    "snp",
+    "genotyping",
+}
+
 USAGE_LOCK = threading.Lock()
 USAGE: Dict[str, int] = {"chat_in": 0, "chat_out": 0, "embed_in": 0}
 
@@ -816,30 +928,61 @@ def _extract_top_tags(text: str, max_tags: int = MAX_TAGS) -> List[str]:
 
 
 def _infer_category_from_text(text: str, categories: List[str]) -> str:
+    """
+    Deterministic category resolver:
+    - Scores each candidate category from text only (no model output dependency)
+    - Uses phrase hints + category-token evidence
+    - Uses stable tie-break by original category order
+    """
     candidates = [c for c in categories if c and c not in ("Other", UNREADABLE_CATEGORY)]
     if not candidates:
         return "Other"
 
-    text_norm = normalize_text(text)[:120000]
+    text_norm = normalize_text(text)[:200000]
+    if not text_norm:
+        return "Other"
+
     text_tokens = _summary_tokens(text_norm)
     token_freq: Dict[str, int] = {}
     for tok in text_tokens:
         token_freq[tok] = token_freq.get(tok, 0) + 1
 
-    best = ("Other", 0.0)
-    for cat in candidates:
+    scored: List[Tuple[float, int, str]] = []
+    for i, cat in enumerate(candidates):
         cat_norm = normalize_text(cat)
         if not cat_norm:
             continue
+
         score = 0.0
         if cat_norm in text_norm:
-            score += 5.0
-        cat_tokens = [t for t in re.findall(r"[a-z0-9]+", cat_norm) if t not in SUMMARY_STOPWORDS]
+            score += 2.0
+
+        # Category-name token signal (e.g., "gene", "expression", "genotyping").
+        cat_tokens = [
+            t
+            for t in re.findall(r"[a-z0-9]+", cat_norm)
+            if t not in SUMMARY_STOPWORDS and t not in CATEGORY_GENERIC_TOKENS
+        ]
         for tok in cat_tokens:
-            score += min(3.0, float(token_freq.get(tok, 0)))
-        if score > best[1]:
-            best = (cat, score)
-    return best[0] if best[1] > 0 else "Other"
+            score += min(1.0, float(token_freq.get(tok, 0)) * 0.2)
+
+        # Tuned phrase hints for known qPCR categories.
+        for phrase, weight in CATEGORY_HINT_PHRASES.get(cat_norm, []):
+            hit_count = text_norm.count(phrase)
+            if hit_count > 0:
+                score += min(3.0, float(hit_count)) * weight
+
+        scored.append((score, i, cat))
+
+    if not scored:
+        return "Other"
+
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    best_score, _best_idx, best_cat = scored[0]
+    # If no meaningful signal, keep deterministic safe fallback.
+    if best_score < 1.0:
+        return "Other"
+    return best_cat
 
 
 def build_fallback_document_summary(text: str, categories: List[str]) -> Dict[str, Any]:
@@ -1625,14 +1768,18 @@ def summarize_document(cfg: AzureConfig, text: str, categories: List[str]) -> Di
     if UNREADABLE_CATEGORY not in categories_list:
         categories_list.append(UNREADABLE_CATEGORY)
     if len(text) <= MAX_CHARS_PER_CHUNK:
-        return summarize_with_model(cfg, text, categories_list)
+        summary = summarize_with_model(cfg, text, categories_list)
+        summary["category"] = _infer_category_from_text(text, categories_list)
+        return summary
 
     chunk_summaries: List[str] = []
     for chunk in split_text(text, MAX_CHARS_PER_CHUNK):
         chunk_summary = summarize_chunk(cfg, chunk)
         chunk_summaries.append(chunk_summary)
     combined = "\n".join(chunk_summaries)
-    return summarize_with_model(cfg, combined, categories_list)
+    summary = summarize_with_model(cfg, combined, categories_list)
+    summary["category"] = _infer_category_from_text(text, categories_list)
+    return summary
 
 
 def summarize_chunk(cfg: AzureConfig, text: str) -> str:

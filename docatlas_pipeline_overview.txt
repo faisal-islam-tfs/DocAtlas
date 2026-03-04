@@ -29,7 +29,7 @@
 - Per document:
   - Short summary (1â€“2 sentences)
   - Long summary (5â€“7 sentences)
-  - Category (from your list)
+  - Category (from your list; final selection is deterministic rule-based on extracted text)
   - Tags
 - Per PDF article:
   - Article summary (4â€“5 sentences, content-first)
