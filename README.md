@@ -38,10 +38,11 @@ Notes:
 - `{application}__docatlas_summaries.xlsx` (falls back to `uncategorized__docatlas_summaries.xlsx`)
   - `Documents` sheet (compact, one row per document):
     - `Category`, `FilePath`, `FileName`, `DuplicateOf`, `DupScore`,
-      `LongSummary`, `ShortSummary`, `ReviewFlag`, `ExtractionStatus`,
-      `DuplicateClusterID`
+      `NearDuplicateOf`, `NearDupScore`, `LongSummary`, `ShortSummary`,
+      `ReviewFlag`, `ExtractionStatus`, `DuplicateClusterID`,
+      `NearDuplicateClusterID`, `ReviewGroupID`, `DuplicateRelationType`
   - `Duplicates` sheet:
-    - duplicate-cluster members only, sorted by category/cluster/score
+    - unified exact+near review members, sorted by category/review-group/relation/score
   - `Articles` sheet (conditional):
     - written only when article generation is enabled (`--articles` in CLI or GUI toggle)
     - in append mode, an already-existing `Articles` sheet is preserved unchanged even if article generation is off
@@ -54,7 +55,7 @@ Notes:
 - `summary_report.txt`
   - counts by category, duplicates, extraction status
 - In each `<category>_Duplicate` folder:
-  - `duplicate_groups_overview.xlsx` (group-review tracker with `Group ID`, `FileName`, `Dupli_sc`, `Assigned to`)
+  - `duplicate_groups_overview.xlsx` (group-review tracker with `Group ID`, `Relation`, `FileName`, `Exact_sc`, `Near_sc`, `Assigned to`, `Action`)
 
 ## Requirements
 Install dependencies:
@@ -255,7 +256,8 @@ python docatlas.py --input "C:\path\to\docs" --output "C:\path\to\out" --app "Se
 - Token usage estimates are added to the summary report.
 - In the GUI, you can toggle append vs overwrite in the "Embeddings Source" step.
 - Embeddings can be computed from the **full text** (default, stricter), **long summary** (lower cost), or **disabled** (hash-only duplicates).
-- Duplicate clusters are moved to `<category>_Duplicate/<DuplicateClusterID>/` (including canonical + duplicate members).
+- Unified duplicate review groups (exact + near) are moved to `<category>_Duplicate/<ReviewGroupID>/`.
+- Grouping is same-category only to reduce cross-topic false positives.
 - Each `<category>_Duplicate` folder also gets `duplicate_groups_overview.xlsx` for manual assignment/review.
 - Import output is written as a standalone workbook: `<app>__docatlas_import.xlsx`.
 - PDF article splitting is optional and disabled by default.

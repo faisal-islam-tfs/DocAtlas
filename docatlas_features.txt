@@ -28,13 +28,13 @@ PDF Article Handling
 
 Duplicate Detection
 - Exact duplicates: SHA-256 hash
-- Near-duplicates: embeddings + cosine similarity
+- Near-duplicates: embeddings + cosine similarity (same-category, balanced rules)
 - Embeddings source: full text (default), summary, or none
 
 Outputs
 - *_docatlas_summaries.xlsx
   - Documents (compact per-document review)
-  - Duplicates (cluster-focused duplicate review)
+  - Duplicates (unified exact+near review groups)
   - Articles (conditional: written only when article generation is enabled; append mode preserves existing sheet)
 - *_docatlas_import.xlsx (standalone import sheet for downstream KB import)
 - *_docatlas_full_text.xlsx (disabled by default; opt-in with --include-full-text-output)
@@ -45,7 +45,7 @@ Outputs
 
 Organization
 - Moves files into category folders
-- Duplicate clusters into <category>_Duplicate/<DuplicateClusterID> (includes canonical + duplicate members)
+- Unified duplicate review clusters (exact + near) into <category>_Duplicate/<ReviewGroupID>
 - Auto-rename if file name conflicts
 - Low/no-text files routed to Unreadable
 

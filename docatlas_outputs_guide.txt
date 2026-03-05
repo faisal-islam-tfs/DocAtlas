@@ -25,7 +25,7 @@ DocAtlas writes:
 
 7) duplicate_groups_overview.xlsx
    - Created inside each <category>_Duplicate folder
-   - Columns: Group ID, FileName, Dupli_sc, Assigned to
+   - Columns: Group ID, Relation, FileName, Exact_sc, Near_sc, Assigned to, Action
 
 Full-text workbook behavior
 ---------------------------
@@ -56,14 +56,14 @@ Articles sheet behavior
 File move behavior
 ------------------
 - Non-duplicates: <category>/
-- Duplicate clusters: <category>_Duplicate/<DuplicateClusterID>/
-- Canonical + duplicate members are grouped together in the cluster folder.
+- Unified review clusters (exact + near): <category>_Duplicate/<ReviewGroupID>/
+- Grouping is same-category only.
 
 Mode notes
 ----------
 - Charter mode / no-move:
   - no file moves
-  - no duplicate folder overviews generated
+  - duplicate folder overviews are still generated from review-group metadata
   - Excel/report outputs still generated
 - Dry run:
   - no API calls, no moves

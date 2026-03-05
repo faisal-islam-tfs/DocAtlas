@@ -113,6 +113,8 @@ DEFAULT_API_TIMEOUT_SEC = 150
 MAX_CHARS_PER_CHUNK = 12000
 MAX_ARTICLE_CHARS = 20000
 DUPLICATE_THRESHOLD = 0.97
+NEAR_DUP_MUTUAL = 0.72
+NEAR_DUP_STRONG = 0.84
 MIN_EXTRACTED_CHARS = 200
 MIN_ARTICLE_BODY_CHARS = 400
 MIN_SPLIT_TOTAL_CHARS = 2500
@@ -380,6 +382,11 @@ class DocRecord:
     duplicate_of: str
     duplicate_score: Optional[float]
     duplicate_group_id: str
+    near_duplicate_of: str
+    near_duplicate_score: Optional[float]
+    near_duplicate_group_id: str
+    review_group_id: str
+    duplicate_relation_type: str
     moved_to: str
 
 
@@ -1901,6 +1908,219 @@ def detect_duplicates(
     return duplicate_of, duplicate_score, duplicate_group_id
 
 
+def _sorted_pair(a: str, b: str) -> Tuple[str, str]:
+    return (a, b) if a <= b else (b, a)
+
+
+def detect_near_duplicates_docs(
+    docs: List[DocRecord],
+    doc_embeddings: Dict[str, Optional[np.ndarray]],
+    min_mutual: float = NEAR_DUP_MUTUAL,
+    strong_score: float = NEAR_DUP_STRONG,
+) -> Tuple[Dict[str, str], Dict[str, float], Dict[str, str], Dict[str, set[str]], set[Tuple[str, str]]]:
+    """
+    Detect near-duplicate candidate edges within the same category.
+    Returns:
+    - near_duplicate_of
+    - near_duplicate_score
+    - near_duplicate_group_id
+    - near_adjacency (doc_id -> neighbor ids)
+    - near_edges (undirected doc_id pairs)
+    """
+    docs_by_id = {d.doc_id: d for d in docs}
+    by_category: Dict[str, List[str]] = {}
+    for d in docs:
+        emb = doc_embeddings.get(d.doc_id)
+        if emb is None:
+            continue
+        by_category.setdefault(d.category, []).append(d.doc_id)
+
+    near_edges: set[Tuple[str, str]] = set()
+    near_edge_scores: Dict[Tuple[str, str], float] = {}
+    near_adjacency: Dict[str, set[str]] = {}
+    near_duplicate_of: Dict[str, str] = {}
+    near_duplicate_score: Dict[str, float] = {}
+    near_duplicate_group_id: Dict[str, str] = {}
+
+    for cat, doc_ids in by_category.items():
+        if len(doc_ids) < 2:
+            continue
+        ids_sorted = sorted(doc_ids, key=lambda x: docs_by_id[x].file_path.lower())
+        vectors: Dict[str, np.ndarray] = {}
+        for doc_id in ids_sorted:
+            vec = doc_embeddings.get(doc_id)
+            if vec is None:
+                continue
+            norm = np.linalg.norm(vec)
+            if norm == 0:
+                continue
+            vectors[doc_id] = vec / norm
+        ids = [i for i in ids_sorted if i in vectors]
+        if len(ids) < 2:
+            continue
+
+        top1: Dict[str, Tuple[str, float]] = {}
+        for i in range(len(ids)):
+            id_i = ids[i]
+            vec_i = vectors[id_i]
+            for j in range(i + 1, len(ids)):
+                id_j = ids[j]
+                vec_j = vectors[id_j]
+                score = float(np.dot(vec_i, vec_j))
+                pair = _sorted_pair(id_i, id_j)
+                if score >= strong_score:
+                    near_edges.add(pair)
+                    near_edge_scores[pair] = max(score, near_edge_scores.get(pair, 0.0))
+                prev_i = top1.get(id_i)
+                if prev_i is None or score > prev_i[1]:
+                    top1[id_i] = (id_j, score)
+                prev_j = top1.get(id_j)
+                if prev_j is None or score > prev_j[1]:
+                    top1[id_j] = (id_i, score)
+
+        for id_i, (id_j, score_i) in top1.items():
+            if score_i < min_mutual:
+                continue
+            top_j = top1.get(id_j)
+            if top_j is None:
+                continue
+            if top_j[0] != id_i or top_j[1] < min_mutual:
+                continue
+            pair = _sorted_pair(id_i, id_j)
+            near_edges.add(pair)
+            near_edge_scores[pair] = max(score_i, near_edge_scores.get(pair, 0.0))
+
+    for a, b in near_edges:
+        near_adjacency.setdefault(a, set()).add(b)
+        near_adjacency.setdefault(b, set()).add(a)
+
+    # Near group IDs (deterministic)
+    seen: set[str] = set()
+    components: List[List[str]] = []
+    for d in sorted(docs, key=lambda x: x.file_path.lower()):
+        if d.doc_id in seen:
+            continue
+        if d.doc_id not in near_adjacency:
+            continue
+        stack = [d.doc_id]
+        comp: List[str] = []
+        seen.add(d.doc_id)
+        while stack:
+            cur = stack.pop()
+            comp.append(cur)
+            for nei in sorted(near_adjacency.get(cur, set())):
+                if nei in seen:
+                    continue
+                seen.add(nei)
+                stack.append(nei)
+        if len(comp) >= 2:
+            components.append(sorted(comp, key=lambda x: docs_by_id[x].file_path.lower()))
+
+    components.sort(key=lambda comp: docs_by_id[comp[0]].file_path.lower())
+    for idx, comp in enumerate(components, start=1):
+        gid = f"NDUP-{idx:04d}"
+        for doc_id in comp:
+            near_duplicate_group_id[doc_id] = gid
+
+    # Per-doc best near link
+    for d in docs:
+        neighbors = near_adjacency.get(d.doc_id, set())
+        if not neighbors:
+            continue
+        best_id = ""
+        best_score = -1.0
+        for nei in neighbors:
+            pair = _sorted_pair(d.doc_id, nei)
+            score = float(near_edge_scores.get(pair, 0.0))
+            if score > best_score:
+                best_score = score
+                best_id = nei
+            elif abs(score - best_score) < 1e-12:
+                if best_id and docs_by_id[nei].file_path.lower() < docs_by_id[best_id].file_path.lower():
+                    best_id = nei
+        if best_id:
+            near_duplicate_of[d.doc_id] = best_id
+            near_duplicate_score[d.doc_id] = best_score
+
+    return near_duplicate_of, near_duplicate_score, near_duplicate_group_id, near_adjacency, near_edges
+
+
+def build_unified_review_groups(
+    docs: List[DocRecord],
+    exact_pairs: set[Tuple[str, str]],
+    near_pairs: set[Tuple[str, str]],
+) -> Tuple[Dict[str, str], Dict[str, str]]:
+    """
+    Build connected review groups from exact + near relations (within same category).
+    Returns:
+    - review_group_id by doc_id
+    - duplicate_relation_type by doc_id
+    """
+    docs_by_id = {d.doc_id: d for d in docs}
+    review_adj: Dict[str, set[str]] = {}
+    exact_adj: Dict[str, set[str]] = {}
+    near_adj: Dict[str, set[str]] = {}
+
+    def _add_pair(pair: Tuple[str, str], target_adj: Dict[str, set[str]]) -> None:
+        a, b = pair
+        da = docs_by_id.get(a)
+        db = docs_by_id.get(b)
+        if da is None or db is None:
+            return
+        if da.category != db.category:
+            return
+        review_adj.setdefault(a, set()).add(b)
+        review_adj.setdefault(b, set()).add(a)
+        target_adj.setdefault(a, set()).add(b)
+        target_adj.setdefault(b, set()).add(a)
+
+    for pair in sorted(exact_pairs):
+        _add_pair(pair, exact_adj)
+    for pair in sorted(near_pairs):
+        _add_pair(pair, near_adj)
+
+    review_group_id: Dict[str, str] = {}
+    relation_type: Dict[str, str] = {}
+
+    seen: set[str] = set()
+    components: List[List[str]] = []
+    for d in sorted(docs, key=lambda x: x.file_path.lower()):
+        doc_id = d.doc_id
+        if doc_id in seen or doc_id not in review_adj:
+            continue
+        stack = [doc_id]
+        comp: List[str] = []
+        seen.add(doc_id)
+        while stack:
+            cur = stack.pop()
+            comp.append(cur)
+            for nei in sorted(review_adj.get(cur, set())):
+                if nei in seen:
+                    continue
+                seen.add(nei)
+                stack.append(nei)
+        if len(comp) >= 2:
+            components.append(sorted(comp, key=lambda x: docs_by_id[x].file_path.lower()))
+
+    components.sort(key=lambda comp: (docs_by_id[comp[0]].category.lower(), docs_by_id[comp[0]].file_path.lower()))
+    for idx, comp in enumerate(components, start=1):
+        gid = f"RGRP-{idx:04d}"
+        for doc_id in comp:
+            review_group_id[doc_id] = gid
+            has_exact = bool(exact_adj.get(doc_id))
+            has_near = bool(near_adj.get(doc_id))
+            if has_exact and has_near:
+                relation_type[doc_id] = "exact+near"
+            elif has_exact:
+                relation_type[doc_id] = "exact"
+            elif has_near:
+                relation_type[doc_id] = "near"
+            else:
+                relation_type[doc_id] = ""
+
+    return review_group_id, relation_type
+
+
 def get_categories_gui(
     app_config: Dict[str, List[str]],
     config_path: Path,
@@ -2503,34 +2723,49 @@ def write_excels(
                 "FileName": d.file_name,
                 "DuplicateOf": d.duplicate_of,
                 "DupScore": float(d.duplicate_score) if d.duplicate_score is not None else 0.0,
+                "NearDuplicateOf": d.near_duplicate_of,
+                "NearDupScore": float(d.near_duplicate_score) if d.near_duplicate_score is not None else 0.0,
                 "LongSummary": d.long_summary,
                 "ShortSummary": d.short_summary,
                 "ReviewFlag": d.review_flags,
                 "ExtractionStatus": d.extraction_status,
                 "DuplicateClusterID": d.duplicate_group_id,
+                "NearDuplicateClusterID": d.near_duplicate_group_id,
+                "ReviewGroupID": d.review_group_id,
+                "DuplicateRelationType": d.duplicate_relation_type,
             }
         )
 
     dup_rows: List[Dict[str, Any]] = []
     for d in new_docs:
-        if not d.duplicate_group_id and not d.duplicate_of:
+        if not d.review_group_id:
             continue
         dup_rows.append(
             {
-                "DuplicateClusterID": d.duplicate_group_id,
+                "ReviewGroupID": d.review_group_id,
                 "Category": d.category,
                 "FilePath": d.file_path,
                 "FileName": d.file_name,
+                "DuplicateRelationType": d.duplicate_relation_type,
                 "DupScore": float(d.duplicate_score) if d.duplicate_score is not None else 0.0,
+                "NearDupScore": float(d.near_duplicate_score) if d.near_duplicate_score is not None else 0.0,
                 "DuplicateOf": d.duplicate_of,
+                "NearDuplicateOf": d.near_duplicate_of,
                 "ReviewFlag": d.review_flags,
             }
         )
+    relation_rank = {"exact": 0, "exact+near": 1, "near": 2}
     dup_rows.sort(
         key=lambda r: (
             str(r.get("Category", "")).lower(),
-            str(r.get("DuplicateClusterID", "")).lower(),
-            -float(r.get("DupScore", 0.0)),
+            str(r.get("ReviewGroupID", "")).lower(),
+            relation_rank.get(str(r.get("DuplicateRelationType", "")).lower(), 3),
+            -(
+                float(r.get("DupScore", 0.0))
+                if float(r.get("DupScore", 0.0)) > 0
+                else float(r.get("NearDupScore", 0.0))
+            ),
+            str(r.get("FileName", "")).lower(),
         )
     )
 
@@ -2570,19 +2805,27 @@ def write_excels(
         "FileName",
         "DuplicateOf",
         "DupScore",
+        "NearDuplicateOf",
+        "NearDupScore",
         "LongSummary",
         "ShortSummary",
         "ReviewFlag",
         "ExtractionStatus",
         "DuplicateClusterID",
+        "NearDuplicateClusterID",
+        "ReviewGroupID",
+        "DuplicateRelationType",
     ]
     dups_columns = [
-        "DuplicateClusterID",
+        "ReviewGroupID",
         "Category",
         "FilePath",
         "FileName",
+        "DuplicateRelationType",
         "DupScore",
+        "NearDupScore",
         "DuplicateOf",
+        "NearDuplicateOf",
         "ReviewFlag",
     ]
     articles_columns = [
@@ -2612,10 +2855,22 @@ def write_excels(
     if not dups_df.empty:
         if "DupScore" in dups_df.columns:
             dups_df["DupScore"] = pd.to_numeric(dups_df["DupScore"], errors="coerce").fillna(0.0)
-        sort_cols = [c for c in ["Category", "DuplicateClusterID", "DupScore"] if c in dups_df.columns]
+        if "NearDupScore" in dups_df.columns:
+            dups_df["NearDupScore"] = pd.to_numeric(dups_df["NearDupScore"], errors="coerce").fillna(0.0)
+        if "DuplicateRelationType" not in dups_df.columns:
+            dups_df["DuplicateRelationType"] = ""
+        dups_df["_relation_rank"] = dups_df["DuplicateRelationType"].astype(str).str.lower().map(relation_rank).fillna(3)
+        dups_df["_best_score"] = np.where(
+            dups_df["DupScore"] > 0,
+            dups_df["DupScore"],
+            dups_df.get("NearDupScore", 0.0),
+        )
+        sort_cols = [c for c in ["Category", "ReviewGroupID", "_relation_rank", "_best_score", "FileName"] if c in dups_df.columns]
         if sort_cols:
-            ascending = [True if c != "DupScore" else False for c in sort_cols]
+            asc_map = {"Category": True, "ReviewGroupID": True, "_relation_rank": True, "_best_score": False, "FileName": True}
+            ascending = [asc_map.get(c, True) for c in sort_cols]
             dups_df = dups_df.sort_values(sort_cols, ascending=ascending, kind="mergesort", na_position="last").reset_index(drop=True)
+        dups_df = dups_df.drop(columns=[c for c in ["_relation_rank", "_best_score"] if c in dups_df.columns], errors="ignore")
 
     articles_sheet_status = "skipped"
     with pd.ExcelWriter(peers_path, engine="openpyxl") as writer:
@@ -2777,6 +3032,9 @@ def write_summary_report(
             dup_group_sizes[d.duplicate_group_id] = dup_group_sizes.get(d.duplicate_group_id, 0) + 1
     dup_group_count = len(dup_group_sizes)
     avg_dup_group_size = int(sum(dup_group_sizes.values()) / dup_group_count) if dup_group_count else 0
+    near_dup_docs = sum(1 for d in docs if d.near_duplicate_of or d.near_duplicate_group_id)
+    near_dup_group_count = len({d.near_duplicate_group_id for d in docs if d.near_duplicate_group_id})
+    review_group_count = len({d.review_group_id for d in docs if d.review_group_id})
 
     lines = []
     lines.append("Summary Report")
@@ -2810,6 +3068,9 @@ def write_summary_report(
     lines.append("Duplicate Groups:")
     lines.append(f"- duplicate_group_count: {dup_group_count}")
     lines.append(f"- avg_duplicate_group_size: {avg_dup_group_size}")
+    lines.append(f"- near_duplicate_document_count: {near_dup_docs}")
+    lines.append(f"- near_duplicate_group_count: {near_dup_group_count}")
+    lines.append(f"- review_group_count: {review_group_count}")
     lines.append("")
     lines.append("Extraction Status:")
     for k in sorted(extraction_status.keys()):
@@ -2850,60 +3111,90 @@ def write_summary_report(
 
 
 def write_duplicate_group_overviews(output_dir: Path, docs: List[DocRecord]) -> None:
-    """Write one duplicate-group overview workbook per <Category>_Duplicate folder."""
-    by_root: Dict[Path, Dict[str, List[Tuple[str, float]]]] = {}
+    """Write one unified review-group overview workbook per <Category>_Duplicate folder."""
+    by_root: Dict[Path, Dict[str, List[Dict[str, Any]]]] = {}
     for d in docs:
-        if not (d.duplicate_group_id or d.duplicate_of):
+        if not d.review_group_id:
             continue
         cat_folder = sanitize_folder(d.category)
-        cluster_id = sanitize_folder(d.duplicate_group_id or f"OF_{d.duplicate_of or 'UNCLUSTERED'}")
+        cluster_id = sanitize_folder(d.review_group_id)
         dup_root = output_dir / f"{cat_folder}_Duplicate"
         file_name = Path(d.moved_to).name if d.moved_to else d.file_name
-        score = float(d.duplicate_score) if d.duplicate_score is not None else 0.0
-        by_root.setdefault(dup_root, {}).setdefault(cluster_id, []).append((file_name, score))
+        exact_score = float(d.duplicate_score) if d.duplicate_score is not None else 0.0
+        near_score = float(d.near_duplicate_score) if d.near_duplicate_score is not None else 0.0
+        relation = d.duplicate_relation_type or ""
+        by_root.setdefault(dup_root, {}).setdefault(cluster_id, []).append(
+            {
+                "file_name": file_name,
+                "relation": relation,
+                "exact_score": exact_score,
+                "near_score": near_score,
+            }
+        )
 
     for dup_root, clusters in by_root.items():
-        if not dup_root.exists():
-            continue
+        dup_root.mkdir(parents=True, exist_ok=True)
         out_path = dup_root / "duplicate_groups_overview.xlsx"
-        existing_assignments: Dict[Tuple[str, str], str] = {}
+        existing_assignments: Dict[Tuple[str, str], Dict[str, str]] = {}
         if out_path.exists():
             try:
                 prev_df = pd.read_excel(out_path, sheet_name="Groups")
                 for _, row in prev_df.iterrows():
                     gid = str(row.get("Group ID", "") or "").strip()
                     fname = str(row.get("FileName", "") or "").strip()
-                    assignee = str(row.get("Assigned to", "") or "").strip()
-                    if not gid or not fname or not assignee:
+                    if not gid or not fname:
                         continue
-                    if gid.startswith("Duplicate Group "):
+                    if gid.startswith("Review Group "):
                         continue
-                    existing_assignments[(gid, fname.lower())] = assignee
+                    existing_assignments[(gid, fname.lower())] = {
+                        "assigned_to": str(row.get("Assigned to", "") or "").strip(),
+                        "action": str(row.get("Action", "") or "").strip(),
+                    }
             except Exception:
                 existing_assignments = {}
         rows: List[Dict[str, Any]] = []
+        relation_rank = {"exact": 0, "exact+near": 1, "near": 2}
         for cluster_id in sorted(clusters.keys()):
             rows.append(
                 {
-                    "Group ID": f"Duplicate Group {cluster_id} - Assigned to:",
+                    "Group ID": f"Review Group {cluster_id} - Assigned to:",
+                    "Relation": "",
                     "FileName": "",
-                    "Dupli_sc": "",
+                    "Exact_sc": "",
+                    "Near_sc": "",
                     "Assigned to": "",
+                    "Action": "",
                 }
             )
-            members = sorted(clusters[cluster_id], key=lambda x: (-x[1], x[0].lower()))
-            for file_name, score in members:
-                assigned_to = existing_assignments.get((cluster_id, file_name.lower()), "")
+            members = sorted(
+                clusters[cluster_id],
+                key=lambda x: (
+                    relation_rank.get(str(x.get("relation", "")).lower(), 3),
+                    -(float(x.get("exact_score", 0.0)) if float(x.get("exact_score", 0.0)) > 0 else float(x.get("near_score", 0.0))),
+                    str(x.get("file_name", "")).lower(),
+                ),
+            )
+            for m in members:
+                file_name = str(m.get("file_name", ""))
+                prev = existing_assignments.get((cluster_id, file_name.lower()), {})
                 rows.append(
                     {
                         "Group ID": cluster_id,
+                        "Relation": m.get("relation", ""),
                         "FileName": file_name,
-                        "Dupli_sc": score,
-                        "Assigned to": assigned_to,
+                        "Exact_sc": m.get("exact_score", 0.0),
+                        "Near_sc": m.get("near_score", 0.0),
+                        "Assigned to": prev.get("assigned_to", ""),
+                        "Action": prev.get("action", ""),
                     }
                 )
 
-        df = sanitize_excel_df(pd.DataFrame(rows, columns=["Group ID", "FileName", "Dupli_sc", "Assigned to"]))
+        df = sanitize_excel_df(
+            pd.DataFrame(
+                rows,
+                columns=["Group ID", "Relation", "FileName", "Exact_sc", "Near_sc", "Assigned to", "Action"],
+            )
+        )
         with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="Groups")
 
@@ -2915,13 +3206,14 @@ def write_duplicate_group_overviews(output_dir: Path, docs: List[DocRecord]) -> 
             ws = wb["Groups"]
             wrap = Alignment(wrap_text=True, vertical="top")
             bold = Font(bold=True)
-            for col in ("A", "B", "C", "D"):
-                ws.column_dimensions[col].width = 36 if col == "A" else 28
+            widths = {"A": 34, "B": 14, "C": 32, "D": 11, "E": 11, "F": 16, "G": 16}
+            for col, width in widths.items():
+                ws.column_dimensions[col].width = width
             for row in range(2, ws.max_row + 1):
                 cell = ws.cell(row=row, column=1)
-                if str(cell.value or "").startswith("Duplicate Group "):
+                if str(cell.value or "").startswith("Review Group "):
                     cell.font = bold
-                for col in range(1, 5):
+                for col in range(1, 8):
                     ws.cell(row=row, column=col).alignment = wrap
             wb.save(out_path)
         except Exception:
@@ -3036,7 +3328,9 @@ def run_pipeline(
     articles: List[ArticleRecord] = []
 
     doc_hashes: Dict[str, str] = {}
+    doc_embeddings_by_id: Dict[str, Optional[np.ndarray]] = {}
     article_hashes: Dict[str, str] = {}
+    doc_embeddings_by_id: Dict[str, Optional[np.ndarray]] = {}
     doc_id_to_key: Dict[str, str] = {}
     article_id_to_key: Dict[str, str] = {}
     article_id_to_idx: Dict[str, int] = {}
@@ -3103,6 +3397,7 @@ def run_pipeline(
                     errors.append({"stage": "embedding", "file_name": path.name, "file_path": str(path), "error": str(exc)})
 
         doc_items.append((doc_id, hsh, emb_vec))
+        doc_embeddings_by_id[doc_id] = emb_vec
 
         # Article handling (PDF only)
         if articles_enabled:
@@ -3226,6 +3521,11 @@ def run_pipeline(
                 duplicate_of=duplicate_of,
                 duplicate_score=duplicate_score,
                 duplicate_group_id=duplicate_group_id,
+                near_duplicate_of="",
+                near_duplicate_score=None,
+                near_duplicate_group_id="",
+                review_group_id="",
+                duplicate_relation_type="",
                 moved_to=moved_to,
             )
         )
@@ -3281,6 +3581,7 @@ def run_pipeline(
     if embeddings_source == "summary":
         doc_items2: List[Tuple[str, str, Optional[np.ndarray]]] = []
         article_items2: List[Tuple[str, str, Optional[np.ndarray]]] = []
+        doc_embeddings_summary: Dict[str, Optional[np.ndarray]] = {}
         min_chars = min_embedding_chars_for_source(embeddings_source)
 
         for d in docs:
@@ -3302,6 +3603,7 @@ def run_pipeline(
                 except Exception as exc:
                     logging.exception("Embedding failed for %s: %s", d.file_path, exc)
             doc_items2.append((d.doc_id, doc_hashes.get(d.doc_id, ""), emb_vec))
+            doc_embeddings_summary[d.doc_id] = emb_vec
 
         for a in articles:
             article_id = f"{a.doc_id}-A{a.article_index:03d}"
@@ -3337,6 +3639,27 @@ def run_pipeline(
             a.duplicate_of = art_dup_of.get(article_id, "")
             a.duplicate_score = art_dup_score.get(article_id)
             a.duplicate_group_id = art_dup_group.get(article_id, "")
+        final_doc_embeddings = doc_embeddings_summary
+    else:
+        final_doc_embeddings = doc_embeddings_by_id
+
+    exact_pairs: set[Tuple[str, str]] = set()
+    docs_by_id = {d.doc_id: d for d in docs}
+    for d in docs:
+        if not d.duplicate_of:
+            continue
+        if d.duplicate_of not in docs_by_id:
+            continue
+        exact_pairs.add(_sorted_pair(d.doc_id, d.duplicate_of))
+
+    near_of, near_score, near_group, _near_adj, near_edges = detect_near_duplicates_docs(docs, final_doc_embeddings)
+    review_groups, relation_types = build_unified_review_groups(docs, exact_pairs, near_edges)
+    for d in docs:
+        d.near_duplicate_of = near_of.get(d.doc_id, "")
+        d.near_duplicate_score = near_score.get(d.doc_id)
+        d.near_duplicate_group_id = near_group.get(d.doc_id, "")
+        d.review_group_id = review_groups.get(d.doc_id, "")
+        d.duplicate_relation_type = relation_types.get(d.doc_id, "")
 
     # Move files
     if not dry_run and not no_move:
@@ -3345,8 +3668,8 @@ def run_pipeline(
                 progress_cb("Moving files", move_idx - 1, len(docs))
             src = Path(d.file_path)
             cat_folder = sanitize_folder(d.category)
-            if d.duplicate_group_id or d.duplicate_of:
-                cluster_id = sanitize_folder(d.duplicate_group_id or f"OF_{d.duplicate_of or 'UNCLUSTERED'}")
+            if d.review_group_id:
+                cluster_id = sanitize_folder(d.review_group_id)
                 dest_dir = output_dir / f"{cat_folder}_Duplicate" / cluster_id
             else:
                 dest_dir = output_dir / cat_folder
@@ -3370,6 +3693,7 @@ def run_pipeline(
                 errors.append({"stage": "move", "file_name": src.name, "file_path": str(src), "error": str(exc)})
             if progress_cb:
                 progress_cb("Moving files", move_idx, len(docs))
+    if not dry_run:
         try:
             write_duplicate_group_overviews(output_dir, docs)
         except Exception as exc:
@@ -3615,6 +3939,7 @@ def run_pipeline_parallel(
             hsh, emb_vec = doc_hash_emb
             doc_hashes[doc_id] = hsh
             doc_items.append((doc_id, hsh, emb_vec))
+            doc_embeddings_by_id[doc_id] = emb_vec
             articles_by_doc[doc_id] = pdf_articles
             if articles_enabled:
                 for a_idx, ((article_id, aemb_vec), (_title, body)) in enumerate(zip(art_embs, pdf_articles), start=1):
@@ -3750,6 +4075,11 @@ def run_pipeline_parallel(
                 duplicate_of=duplicate_of,
                 duplicate_score=duplicate_score,
                 duplicate_group_id=duplicate_group_id,
+                near_duplicate_of="",
+                near_duplicate_score=None,
+                near_duplicate_group_id="",
+                review_group_id="",
+                duplicate_relation_type="",
                 moved_to="",
             )
         )
@@ -3793,6 +4123,7 @@ def run_pipeline_parallel(
     if embeddings_source == "summary":
         doc_items2: List[Tuple[str, str, Optional[np.ndarray]]] = []
         article_items2: List[Tuple[str, str, Optional[np.ndarray]]] = []
+        doc_embeddings_summary: Dict[str, Optional[np.ndarray]] = {}
         min_chars = min_embedding_chars_for_source(embeddings_source)
 
         for d in docs:
@@ -3814,6 +4145,7 @@ def run_pipeline_parallel(
                 except Exception as exc:
                     logging.exception("Embedding failed for %s: %s", d.file_path, exc)
             doc_items2.append((d.doc_id, doc_hashes.get(d.doc_id, ""), emb_vec))
+            doc_embeddings_summary[d.doc_id] = emb_vec
 
         for a in articles:
             article_id = f"{a.doc_id}-A{a.article_index:03d}"
@@ -3849,13 +4181,34 @@ def run_pipeline_parallel(
             a.duplicate_of = art_dup_of.get(article_id, "")
             a.duplicate_score = art_dup_score.get(article_id)
             a.duplicate_group_id = art_dup_group.get(article_id, "")
+        final_doc_embeddings = doc_embeddings_summary
+    else:
+        final_doc_embeddings = doc_embeddings_by_id
+
+    exact_pairs: set[Tuple[str, str]] = set()
+    docs_by_id = {d.doc_id: d for d in docs}
+    for d in docs:
+        if not d.duplicate_of:
+            continue
+        if d.duplicate_of not in docs_by_id:
+            continue
+        exact_pairs.add(_sorted_pair(d.doc_id, d.duplicate_of))
+
+    near_of, near_score, near_group, _near_adj, near_edges = detect_near_duplicates_docs(docs, final_doc_embeddings)
+    review_groups, relation_types = build_unified_review_groups(docs, exact_pairs, near_edges)
+    for d in docs:
+        d.near_duplicate_of = near_of.get(d.doc_id, "")
+        d.near_duplicate_score = near_score.get(d.doc_id)
+        d.near_duplicate_group_id = near_group.get(d.doc_id, "")
+        d.review_group_id = review_groups.get(d.doc_id, "")
+        d.duplicate_relation_type = relation_types.get(d.doc_id, "")
 
     if not dry_run and not no_move:
         for d in docs:
             src = Path(d.file_path)
             cat_folder = sanitize_folder(d.category)
-            if d.duplicate_group_id or d.duplicate_of:
-                cluster_id = sanitize_folder(d.duplicate_group_id or f"OF_{d.duplicate_of or 'UNCLUSTERED'}")
+            if d.review_group_id:
+                cluster_id = sanitize_folder(d.review_group_id)
                 dest_dir = output_dir / f"{cat_folder}_Duplicate" / cluster_id
             else:
                 dest_dir = output_dir / cat_folder
@@ -3878,6 +4231,7 @@ def run_pipeline_parallel(
                 logging.exception("Failed to move %s: %s", src, exc)
                 with errors_lock:
                     errors.append({"stage": "move", "file_name": src.name, "file_path": str(src), "error": str(exc)})
+    if not dry_run:
         try:
             write_duplicate_group_overviews(output_dir, docs)
         except Exception as exc:

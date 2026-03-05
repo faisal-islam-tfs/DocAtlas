@@ -40,14 +40,17 @@
 
 5) Duplicate detection
 - Exact duplicates: SHA-256 hash
-- Near-duplicates: embeddings + cosine similarity
+- Near-duplicates (paraphrase candidates): embeddings + cosine similarity
+  - Evaluated within the same category only
+  - Balanced rules: strong-score edge or mutual-top1 edge
   - Full text by default (can be changed to summary or disabled)
   - Embeddings API is used here (only if embeddings are enabled)
+- Exact + near edges are merged into unified review groups (`ReviewGroupID`)
 
 6) Outputs
 - *_docatlas_summaries.xlsx
   - Documents sheet (compact per-document review fields)
-  - Duplicates sheet (duplicate-cluster candidates sorted for triage)
+  - Duplicates sheet (unified exact+near review members sorted for triage)
   - Articles sheet is conditional:
     - written only when article generation is enabled
     - in append mode, existing `Articles` sheet is preserved unchanged when article generation is disabled
@@ -59,7 +62,7 @@
 
 7) File organization
 - Move files into category folders
-- Duplicate clusters go to <category>_Duplicate/<DuplicateClusterID> (canonical + duplicate members together for review)
+- Unified review clusters go to <category>_Duplicate/<ReviewGroupID> (exact + near together for review)
 - Low/no-text files go to Unreadable
 
 Potential cost/time points
