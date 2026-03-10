@@ -3,6 +3,8 @@
 
 1) Discover & validate
 - Scan input folder for supported files (.pdf, .doc, .docx, .ppt, .pptx, .xlsx)
+- Auto-unpack any .zip archives into a temporary staging area and include supported files found inside them
+- Store workbook-facing source paths relative to the selected input root
 - Skip unsupported types
 - CLI can run with parallel workers (`--workers N`); GUI runs the progress-callback path
 
@@ -64,6 +66,7 @@
 - Move files into category folders
 - Unified review clusters go to <category>_Duplicate/<ReviewGroupID> (exact + near together for review)
 - Low/no-text files go to Unreadable
+- Files originating from archives are moved from the staging copy; source paths in outputs stay readable as `archive.zip!/inner/file.ext`
 
 Potential cost/time points
 ==========================

@@ -39,6 +39,8 @@ Import sheet mapping behavior
 - Fallback path: <App>/<Category>
 - ArticleType is content-based rule classification.
 - AutoPublish is always true.
+- `FilePath` values in review workbooks are relative to the selected input root.
+- For files coming from archives, source references in workbooks use a logical relative path like `archive.zip!/inner/file.pdf` rather than the temporary staging path.
 
 Articles sheet behavior
 -----------------------

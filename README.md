@@ -269,6 +269,9 @@ python docatlas.py --input "C:\path\to\docs" --output "C:\path\to\out" --app "Se
 - If OCR is enabled, embedded images inside `.docx` and `.pptx` are also OCR-processed.
 - Embeddings are skipped for very short texts to reduce cost (configurable in code).
 - `.doc` files are supported by auto-conversion to `.docx` via LibreOffice (`soffice`) if installed.
+- `.zip` archives in the input tree are auto-unpacked into a temporary staging folder; supported files inside them are processed normally.
+- Workbook/report `FilePath` values are stored relative to the selected input root, not as machine-specific absolute paths.
+- Files discovered inside archives keep a logical relative path like `archive.zip!/inner/file.pdf` in reports and Excel outputs.
 - Tags are deduplicated and capped to a reasonable size.
 - `summary_report.txt` includes file type breakdown, category percentages, OCR usage count, duplicate group stats, and document length stats.
 - Errors are captured per file and reported in `summary_report.txt` without stopping the run.

@@ -3,6 +3,8 @@
 
 Input & Extraction
 - Supports .pdf, .doc, .docx, .ppt, .pptx, .xlsx
+- Auto-unpacks .zip archives into a temporary staging area and processes supported files inside them
+- Stores workbook-facing source paths relative to the selected input root
 - .doc auto-converted to .docx via LibreOffice (if installed)
 - PDF extraction via pdfplumber
 - OCR for PDFs: OCRmyPDF (non-forced pass, then forced pass only if needed) -> Tesseract fallback
@@ -90,5 +92,5 @@ Hidden/Internal Features
 - Resume cache avoids reprocessing unchanged files
 - Short-text guard skips embeddings for tiny inputs
 - OCR logs note when OCR is triggered
-- File key based on path + mtime + size to detect changes
+- File key based on source path + mtime + size, or archive/member identity for zip contents, to detect changes
 

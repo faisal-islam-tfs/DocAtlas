@@ -2,6 +2,7 @@
 """
 DocAtlas document processing pipeline:
 - Extract text from PDF/DOCX/PPTX/XLSX
+- Auto-unpack zip archives into a staging area and process supported contents
 - Summarize, categorize, tag with Azure OpenAI
 - Detect duplicates via hashes + embeddings
 - Output Excel files (peers + full_text)
@@ -23,6 +24,7 @@ import subprocess
 import sys
 import time
 import tempfile
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
@@ -370,6 +372,7 @@ class DocRecord:
     file_key: str
     file_name: str
     file_path: str
+    source_path: str
     file_ext: str
     category: str
     tags: List[str]
@@ -402,6 +405,13 @@ class ArticleRecord:
     duplicate_of: str
     duplicate_score: Optional[float]
     duplicate_group_id: str
+
+
+@dataclass
+class InputFile:
+    source_path: Path
+    display_path: str
+    file_key: str
 
 
 def env(name: str, default: Optional[str] = None) -> Optional[str]:
@@ -525,6 +535,7 @@ def setup_logging(out_dir: Path) -> None:
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(message)s",
         handlers=[logging.FileHandler(log_path, encoding="utf-8"), logging.StreamHandler(sys.stdout)],
+        force=True,
     )
 
 
@@ -673,18 +684,169 @@ def _post_with_retries(
     raise RuntimeError(f"{op_name} request failed after retries")
 
 
-def list_files(input_dir: Path) -> List[Path]:
-    files: List[Path] = []
+def file_key(path: Path, display_path: Optional[str] = None) -> str:
+    st = path.stat()
+    key_path = display_path or str(path)
+    return f"{key_path}|{st.st_mtime_ns}|{st.st_size}"
+
+
+def zip_member_key(zip_display_path: str, member_display_path: str, zip_path: Path, info: zipfile.ZipInfo) -> str:
+    zip_stat = zip_path.stat()
+    return (
+        f"{member_display_path}|"
+        f"zip={zip_display_path}|"
+        f"zip_mtime={zip_stat.st_mtime_ns}|"
+        f"zip_size={zip_stat.st_size}|"
+        f"entry_crc={int(info.CRC)}|"
+        f"entry_size={int(info.file_size)}"
+    )
+
+
+def sanitize_zip_member_segment(value: str) -> str:
+    clean = "".join("_" if c in INVALID_WIN_CHARS else c for c in (value or ""))
+    clean = clean.strip(" .")
+    return clean or "_"
+
+
+def build_safe_zip_target(base_dir: Path, member_name: str, used_targets: set[str]) -> Optional[Path]:
+    raw_parts = [p for p in str(member_name).replace("\\", "/").split("/") if p not in ("", ".")]
+    if not raw_parts:
+        return None
+    if any(part == ".." for part in raw_parts):
+        raise ValueError(f"Zip member escapes extraction root: {member_name}")
+
+    safe_parts = [sanitize_zip_member_segment(part) for part in raw_parts]
+    target = base_dir.joinpath(*safe_parts)
+    try:
+        resolved_base = base_dir.resolve()
+        resolved_target = target.resolve(strict=False)
+    except Exception:
+        resolved_base = base_dir.absolute()
+        resolved_target = target.absolute()
+    if not str(resolved_target).startswith(str(resolved_base)):
+        raise ValueError(f"Zip member escapes extraction root: {member_name}")
+
+    candidate = target
+    if candidate.exists() or str(candidate).lower() in used_targets:
+        stem = candidate.stem
+        suffix = candidate.suffix
+        idx = 1
+        while True:
+            alt = candidate.with_name(f"{stem}_{idx}{suffix}")
+            if not alt.exists() and str(alt).lower() not in used_targets:
+                candidate = alt
+                break
+            idx += 1
+
+    used_targets.add(str(candidate).lower())
+    return candidate
+
+
+def extract_zip_inputs(zip_path: Path, zip_display_path: str, staging_root: Path) -> Tuple[List[InputFile], List[Tuple[Path, str]]]:
+    extracted_files: List[InputFile] = []
+    nested_zips: List[Tuple[Path, str]] = []
+    archive_slug = hashlib.sha1(zip_display_path.encode("utf-8", errors="ignore")).hexdigest()[:12]
+    extract_dir = staging_root / archive_slug
+    extract_dir.mkdir(parents=True, exist_ok=True)
+    used_targets: set[str] = set()
+
+    with zipfile.ZipFile(zip_path) as zf:
+        for info in zf.infolist():
+            if info.is_dir():
+                continue
+            target = build_safe_zip_target(extract_dir, info.filename, used_targets)
+            if target is None:
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zf.open(info) as src, target.open("wb") as dst:
+                shutil.copyfileobj(src, dst)
+
+            try:
+                member_dt = time.mktime(info.date_time + (0, 0, -1))
+                os.utime(target, (member_dt, member_dt))
+            except Exception:
+                pass
+
+            member_rel = str(info.filename).replace("\\", "/").lstrip("/")
+            member_display_path = f"{zip_display_path}!/{member_rel}"
+            ext = target.suffix.lower()
+            if ext in SUPPORTED_EXTS:
+                extracted_files.append(
+                    InputFile(
+                        source_path=target,
+                        display_path=member_display_path,
+                        file_key=zip_member_key(zip_display_path, member_display_path, zip_path, info),
+                    )
+                )
+            elif ext == ".zip":
+                nested_zips.append((target, member_display_path))
+
+    return extracted_files, nested_zips
+
+
+def relative_input_path(input_dir: Path, path: Path) -> str:
+    try:
+        rel = path.relative_to(input_dir)
+    except Exception:
+        rel = Path(path.name)
+    return str(rel).replace("\\", "/")
+
+
+def normalize_compare_path(value: str) -> str:
+    return str(value or "").strip().replace("\\", "/").casefold()
+
+
+def path_compare_aliases(value: str) -> set[str]:
+    norm = normalize_compare_path(value)
+    if not norm:
+        return set()
+    parts = [p for p in norm.split("/") if p]
+    aliases = {norm}
+    for idx in range(len(parts)):
+        aliases.add("/".join(parts[idx:]))
+    return aliases
+
+
+def list_files(input_dir: Path) -> Tuple[List[InputFile], Optional[tempfile.TemporaryDirectory[str]]]:
+    files: List[InputFile] = []
+    zip_files: List[Tuple[Path, str]] = []
     for p in input_dir.rglob("*"):
-        if p.is_file() and p.suffix.lower() in SUPPORTED_EXTS:
-            files.append(p)
-    return files
+        if not p.is_file():
+            continue
+        ext = p.suffix.lower()
+        if ext in SUPPORTED_EXTS:
+            display_path = relative_input_path(input_dir, p)
+            files.append(InputFile(source_path=p, display_path=display_path, file_key=file_key(p, display_path)))
+        elif ext == ".zip":
+            zip_files.append((p, relative_input_path(input_dir, p)))
+
+    temp_dir: Optional[tempfile.TemporaryDirectory[str]] = None
+    if zip_files:
+        temp_dir = tempfile.TemporaryDirectory(prefix="docatlas_zip_stage_")
+        staging_root = Path(temp_dir.name)
+        pending = list(zip_files)
+        while pending:
+            zip_path, zip_display_path = pending.pop(0)
+            try:
+                staged_files, nested_zips = extract_zip_inputs(zip_path, zip_display_path, staging_root)
+            except zipfile.BadZipFile:
+                logging.warning("Skipping invalid zip archive: %s", zip_display_path)
+                continue
+            except Exception as exc:
+                logging.warning("Failed to extract zip archive %s: %s", zip_display_path, exc)
+                continue
+            files.extend(staged_files)
+            pending.extend(nested_zips)
+
+    files.sort(key=lambda item: item.display_path.lower())
+    return files, temp_dir
 
 
-def scan_input_stats(files: List[Path]) -> Dict[str, Any]:
+def scan_input_stats(files: List[InputFile]) -> Dict[str, Any]:
     total_size = 0
     by_ext: Dict[str, int] = {}
-    for p in files:
+    for item in files:
+        p = item.source_path
         try:
             total_size += p.stat().st_size
         except Exception:
@@ -1156,7 +1318,11 @@ def validate_app_and_category_map(app_config: Dict[str, List[str]], category_pat
 def resolve_category_path(category_path_map: Dict[str, Any], app_name: Optional[str], category: str) -> str:
     app_key = (app_name or "uncategorized").strip()
     cat = (category or "").strip()
-    fallback = f"{app_key}/{cat}" if cat else app_key
+    app_seg = sanitize_path_segment(app_key)
+    cat_seg = sanitize_path_segment(cat)
+    fallback = f"/Life_Sciences/Life_Science_Applications/{app_seg}"
+    if cat_seg:
+        fallback = f"{fallback}/{cat_seg}"
 
     def normalize_with_app_prefix(raw_path: str) -> str:
         noisy = {"? to", "top level (1)", "mid level (2)", "mid level (3)", "bottom level (4)"}
@@ -1167,6 +1333,9 @@ def resolve_category_path(category_path_map: Dict[str, Any], app_name: Optional[
         ]
         if not parts:
             return fallback
+        # Absolute tool-template path: /Life_Sciences/Life_Science_Applications/...
+        if parts[0].casefold() == "life_sciences":
+            return "/" + "/".join(parts)
         if parts[0].casefold() == app_key.casefold():
             parts[0] = app_key
             return "/".join(parts)
@@ -1191,6 +1360,56 @@ def resolve_category_path(category_path_map: Dict[str, Any], app_name: Optional[
 def stable_import_id(file_path: str, title: str) -> str:
     base = f"{normalize_text(file_path)}|{normalize_text(title)}"
     return f"imp_{hashlib.sha1(base.encode('utf-8', errors='ignore')).hexdigest()[:16]}"
+
+
+def sanitize_path_segment(value: str) -> str:
+    s = (value or "").strip()
+    s = re.sub(r"\s*\([^)]*\)", "", s)
+    s = s.replace("&", " and ")
+    s = s.replace("/", " ").replace("\\", " ").replace("'", "")
+    s = re.sub(r"\s+", "_", s)
+    s = re.sub(r"[^A-Za-z0-9_\-]", "", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s or "Uncategorized"
+
+
+ARTICLE_TYPE_PATH_SEGMENTS = {
+    "Application and Product Notes": "Application_and_Product_Notes",
+    "Documentation": "Documentation",
+    "Education & Training": "Education_and_Training",
+    "Manuals and Guides": "Manuals_and_Guides",
+    "FAQs": "FAQs",
+    "Troubleshooting": "Troubleshooting",
+    "References": "References",
+}
+
+
+def article_type_path_segment(article_type: str) -> str:
+    return ARTICLE_TYPE_PATH_SEGMENTS.get((article_type or "").strip(), sanitize_path_segment(article_type))
+
+
+def build_import_path(base_path: str, category: str, article_type: str) -> str:
+    base = (base_path or "").strip().replace("\\", "/")
+    if not base:
+        base = "/Life_Sciences/Life_Science_Applications"
+    if not base.startswith("/"):
+        base = "/" + base
+    base = re.sub(r"/+", "/", base).rstrip("/")
+    guide_seg = f"{sanitize_path_segment(category)}_{article_type_path_segment(article_type)}"
+    return f"{base}/{guide_seg}"
+
+
+def display_doc_ref(doc_ref: str) -> str:
+    ref = (doc_ref or "").strip()
+    if not ref:
+        return ""
+    m = re.search(r"DOC-(\d+)$", ref)
+    if not m:
+        return ref
+    try:
+        return f"DOC-{int(m.group(1)):04d}"
+    except ValueError:
+        return f"DOC-{m.group(1)}"
 
 
 def text_to_html(text: str) -> str:
@@ -2608,7 +2827,12 @@ def edit_applications_gui(config_path: Path, app_config: Dict[str, List[str]], p
     refresh_list()
 
 
-def process_file(path: Path, ocrmypdf_enabled: bool, articles_enabled: bool = True) -> Tuple[str, List[Tuple[str, str]], str]:
+def process_file(
+    path: Path,
+    ocrmypdf_enabled: bool,
+    articles_enabled: bool = True,
+    source_label: Optional[str] = None,
+) -> Tuple[str, List[Tuple[str, str]], str]:
     ext = path.suffix.lower()
     try:
         if path.stat().st_size == 0:
@@ -2655,7 +2879,7 @@ def process_file(path: Path, ocrmypdf_enabled: bool, articles_enabled: bool = Tr
         return text, [], status
     if ext == ".pdf":
         text, pages, status = extract_text_pdf(path, ocrmypdf_enabled)
-        articles = split_pdf_into_articles(pages, source_label=str(path)) if articles_enabled else []
+        articles = split_pdf_into_articles(pages, source_label=source_label or str(path)) if articles_enabled else []
         return text, articles, status
     raise ValueError(f"Unsupported file type: {ext}")
 
@@ -2688,9 +2912,11 @@ def write_excels(
             if "file_key" in existing_docs_df.columns:
                 existing_doc_keys = set(existing_docs_df["file_key"].astype(str))
             if "file_path" in existing_docs_df.columns:
-                existing_doc_paths = set(existing_docs_df["file_path"].astype(str))
+                for val in existing_docs_df["file_path"].astype(str):
+                    existing_doc_paths.update(path_compare_aliases(val))
             if "FilePath" in existing_docs_df.columns:
-                existing_doc_paths.update(existing_docs_df["FilePath"].astype(str))
+                for val in existing_docs_df["FilePath"].astype(str):
+                    existing_doc_paths.update(path_compare_aliases(val))
         except Exception:
             existing_docs_df = None
             existing_doc_keys = set()
@@ -2713,7 +2939,7 @@ def write_excels(
     docs_rows: List[Dict[str, Any]] = []
     new_docs: List[DocRecord] = []
     for d in docs:
-        if append_excel and (d.file_key in existing_doc_keys or d.file_path in existing_doc_paths):
+        if append_excel and (d.file_key in existing_doc_keys or normalize_compare_path(d.file_path) in existing_doc_paths):
             continue
         new_docs.append(d)
         docs_rows.append(
@@ -2721,9 +2947,9 @@ def write_excels(
                 "Category": d.category,
                 "FilePath": d.file_path,
                 "FileName": d.file_name,
-                "DuplicateOf": d.duplicate_of,
+                "DuplicateOf": display_doc_ref(d.duplicate_of),
                 "DupScore": float(d.duplicate_score) if d.duplicate_score is not None else 0.0,
-                "NearDuplicateOf": d.near_duplicate_of,
+                "NearDuplicateOf": display_doc_ref(d.near_duplicate_of),
                 "NearDupScore": float(d.near_duplicate_score) if d.near_duplicate_score is not None else 0.0,
                 "LongSummary": d.long_summary,
                 "ShortSummary": d.short_summary,
@@ -2749,8 +2975,8 @@ def write_excels(
                 "DuplicateRelationType": d.duplicate_relation_type,
                 "DupScore": float(d.duplicate_score) if d.duplicate_score is not None else 0.0,
                 "NearDupScore": float(d.near_duplicate_score) if d.near_duplicate_score is not None else 0.0,
-                "DuplicateOf": d.duplicate_of,
-                "NearDuplicateOf": d.near_duplicate_of,
+                "DuplicateOf": display_doc_ref(d.duplicate_of),
+                "NearDuplicateOf": display_doc_ref(d.near_duplicate_of),
                 "ReviewFlag": d.review_flags,
             }
         )
@@ -2889,17 +3115,19 @@ def write_excels(
     for d in docs:
         content_text = text_by_doc_id.get(d.doc_id, "")
         title = d.short_summary or d.file_name
+        article_type = classify_article_type_by_content(d.short_summary, d.long_summary, content_text)
+        base_path = resolve_category_path(category_path_map, app_name, d.category)
         import_rows.append(
             {
                 "Id": stable_import_id(d.file_path, title),
-                "Path": resolve_category_path(category_path_map, app_name, d.category),
+                "Path": build_import_path(base_path, d.category, article_type),
                 "Title": title,
                 "Content": text_to_html(content_text),
                 "Summary": d.long_summary,
                 "Tags": ", ".join(d.tags),
                 "Attachments": attachment_path_for_doc(d.file_name, d.file_path),
                 "AutoPublish": True,
-                "ArticleType": classify_article_type_by_content(d.short_summary, d.long_summary, content_text),
+                "ArticleType": article_type,
             }
         )
     import_path = write_import_excel(out_dir, app_name, import_rows, append_excel)
@@ -2926,7 +3154,9 @@ def write_excels(
             if "file_key" in full_df.columns and existing_doc_keys:
                 full_df = full_df[~full_df["file_key"].astype(str).isin(existing_doc_keys)]
             if "file_path" in full_df.columns and existing_doc_paths:
-                full_df = full_df[~full_df["file_path"].astype(str).isin(existing_doc_paths)]
+                full_df = full_df[
+                    ~full_df["file_path"].astype(str).map(lambda x: normalize_compare_path(x) in existing_doc_paths)
+                ]
         if append_excel and existing_full_df is not None:
             full_df = pd.concat([existing_full_df, full_df], ignore_index=True)
 
@@ -3260,11 +3490,6 @@ def prompt_api_key_gui(title: str, label_text: str) -> Optional[str]:
     return result[0] if result else None
 
 
-def file_key(path: Path) -> str:
-    st = path.stat()
-    return f"{path}|{st.st_mtime_ns}|{st.st_size}"
-
-
 def load_resume(out_dir: Path) -> Dict[str, Any]:
     resume_path = out_dir / RESUME_FILENAME
     if not resume_path.exists():
@@ -3306,7 +3531,7 @@ def run_pipeline(
 
     reset_usage()
 
-    files = list_files(input_dir)
+    files, staged_inputs = list_files(input_dir)
     total_files = len(files)
     input_stats = scan_input_stats(files)
     if limit is not None and limit > 0:
@@ -3314,6 +3539,8 @@ def run_pipeline(
     processed_stats = scan_input_stats(files)
     if not files:
         logging.warning("No supported files found")
+        if staged_inputs is not None:
+            staged_inputs.cleanup()
         return
 
     run_id = time.strftime("%Y%m%d%H%M%S")
@@ -3330,7 +3557,6 @@ def run_pipeline(
     doc_hashes: Dict[str, str] = {}
     doc_embeddings_by_id: Dict[str, Optional[np.ndarray]] = {}
     article_hashes: Dict[str, str] = {}
-    doc_embeddings_by_id: Dict[str, Optional[np.ndarray]] = {}
     doc_id_to_key: Dict[str, str] = {}
     article_id_to_key: Dict[str, str] = {}
     article_id_to_idx: Dict[str, int] = {}
@@ -3342,15 +3568,17 @@ def run_pipeline(
     doc_summary_fallback_ids: set[str] = set()
 
     iterable = tqdm(files, desc="Extracting") if tqdm else files
-    for idx, path in enumerate(iterable, start=1):
+    for idx, input_file in enumerate(iterable, start=1):
+        path = input_file.source_path
+        display_path = input_file.display_path
         if progress_cb:
             progress_cb("Extracting", idx - 1, len(files))
-        key = file_key(path)
+        key = input_file.file_key
         cached = resume_files.get(key)
         doc_id = f"{run_id}-DOC-{idx:05d}"
         if cached and cached.get("doc_id"):
             doc_id = cached["doc_id"]
-        logging.info("Processing %s", path)
+        logging.info("Processing %s", display_path)
         doc_id_to_key[doc_id] = key
         if cached:
             text = cached.get("text", "")
@@ -3359,16 +3587,21 @@ def run_pipeline(
             cached["doc_id"] = doc_id
         else:
             try:
-                text, pdf_articles, extraction_status = process_file(path, ocrmypdf_enabled, articles_enabled)
+                text, pdf_articles, extraction_status = process_file(
+                    path,
+                    ocrmypdf_enabled,
+                    articles_enabled,
+                    source_label=display_path,
+                )
             except Exception as exc:
-                logging.exception("Failed to extract %s: %s", path, exc)
-                errors.append({"stage": "extract", "file_name": path.name, "file_path": str(path), "error": str(exc)})
+                logging.exception("Failed to extract %s: %s", display_path, exc)
+                errors.append({"stage": "extract", "file_name": path.name, "file_path": display_path, "error": str(exc)})
                 text = ""
                 pdf_articles = []
                 extraction_status = "no_text"
             resume_files[key] = {
                 "doc_id": doc_id,
-                "file_path": str(path),
+                "file_path": display_path,
                 "file_name": path.name,
                 "ext": path.suffix.lower(),
                 "text": text,
@@ -3393,8 +3626,8 @@ def run_pipeline(
                     emb_vec = np.array(emb, dtype=np.float32)
                     resume_files[key]["doc_embedding"] = emb
                 except Exception as exc:
-                    logging.exception("Embedding failed for %s: %s", path, exc)
-                    errors.append({"stage": "embedding", "file_name": path.name, "file_path": str(path), "error": str(exc)})
+                    logging.exception("Embedding failed for %s: %s", display_path, exc)
+                    errors.append({"stage": "embedding", "file_name": path.name, "file_path": display_path, "error": str(exc)})
 
         doc_items.append((doc_id, hsh, emb_vec))
         doc_embeddings_by_id[doc_id] = emb_vec
@@ -3421,8 +3654,8 @@ def run_pipeline(
                             aemb_vec = np.array(aemb, dtype=np.float32)
                             resume_files[key].setdefault("article_embeddings", {})[str(a_idx)] = aemb
                         except Exception as exc:
-                            logging.exception("Article embedding failed for %s: %s", path, exc)
-                            errors.append({"stage": "article_embedding", "file_name": path.name, "file_path": str(path), "error": str(exc)})
+                            logging.exception("Article embedding failed for %s: %s", display_path, exc)
+                            errors.append({"stage": "article_embedding", "file_name": path.name, "file_path": display_path, "error": str(exc)})
                 article_items.append((article_id, ahash, aemb_vec))
 
         if use_resume:
@@ -3442,10 +3675,12 @@ def run_pipeline(
         art_dup_of, art_dup_score, art_dup_group = {}, {}, {}
 
     iterable2 = tqdm(files, desc="Summarizing") if tqdm else files
-    for idx, path in enumerate(iterable2, start=1):
+    for idx, input_file in enumerate(iterable2, start=1):
+        path = input_file.source_path
+        display_path = input_file.display_path
         if progress_cb:
             progress_cb("Summarizing", idx - 1, len(files))
-        key = file_key(path)
+        key = input_file.file_key
         doc_id = resume_files.get(key, {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
         text = raw_texts.get(doc_id, "")
         cached = resume_files.get(key, {})
@@ -3462,8 +3697,8 @@ def run_pipeline(
                     doc_summary_fallback_ids.add(doc_id)
                 resume_files[key]["doc_summary"] = summary
             except Exception as exc:
-                logging.exception("Summarization failed for %s: %s", path, exc)
-                errors.append({"stage": "summarize", "file_name": path.name, "file_path": str(path), "error": str(exc)})
+                logging.exception("Summarization failed for %s: %s", display_path, exc)
+                errors.append({"stage": "summarize", "file_name": path.name, "file_path": display_path, "error": str(exc)})
                 summary = {}
 
         category = (summary.get("category") or "uncategorized").strip()
@@ -3508,7 +3743,8 @@ def run_pipeline(
                 doc_id=doc_id,
                 file_key=key,
                 file_name=path.name,
-                file_path=str(path),
+                file_path=display_path,
+                source_path=str(path),
                 file_ext=path.suffix.lower(),
                 category=category,
                 tags=tags,
@@ -3542,10 +3778,10 @@ def run_pipeline(
             else:
                 try:
                     _, pages, _ = extract_text_pdf(path, ocrmypdf_enabled)
-                    article_list = split_pdf_into_articles(pages, source_label=str(path))
+                    article_list = split_pdf_into_articles(pages, source_label=display_path)
                 except Exception as exc:
-                    logging.exception("Failed to split articles for %s: %s", path, exc)
-                    errors.append({"stage": "split_articles", "file_name": path.name, "file_path": str(path), "error": str(exc)})
+                    logging.exception("Failed to split articles for %s: %s", display_path, exc)
+                    errors.append({"stage": "split_articles", "file_name": path.name, "file_path": display_path, "error": str(exc)})
         for a_idx, (title, body) in enumerate(article_list, start=1):
             article_id = f"{doc_id}-A{a_idx:03d}"
             cached_summary = None
@@ -3560,15 +3796,15 @@ def run_pipeline(
                     art_summary, _ = summarize_article_safe(cfg, body, path.name)
                     resume_files[key].setdefault("article_summaries", {})[str(a_idx)] = art_summary
                 except Exception as exc:
-                    logging.exception("Article summary failed for %s: %s", path, exc)
-                    errors.append({"stage": "article_summarize", "file_name": path.name, "file_path": str(path), "error": str(exc)})
+                    logging.exception("Article summary failed for %s: %s", display_path, exc)
+                    errors.append({"stage": "article_summarize", "file_name": path.name, "file_path": display_path, "error": str(exc)})
                     art_summary = ""
             articles.append(
                 ArticleRecord(
                     doc_id=doc_id,
                     file_key=key,
                     file_name=path.name,
-                    file_path=str(path),
+                    file_path=display_path,
                     article_index=a_idx,
                     article_title=title,
                     article_summary=art_summary,
@@ -3666,7 +3902,7 @@ def run_pipeline(
         for move_idx, d in enumerate(docs, start=1):
             if progress_cb:
                 progress_cb("Moving files", move_idx - 1, len(docs))
-            src = Path(d.file_path)
+            src = Path(d.source_path)
             cat_folder = sanitize_folder(d.category)
             if d.review_group_id:
                 cluster_id = sanitize_folder(d.review_group_id)
@@ -3690,7 +3926,7 @@ def run_pipeline(
                 d.moved_to = str(target)
             except Exception as exc:
                 logging.exception("Failed to move %s: %s", src, exc)
-                errors.append({"stage": "move", "file_name": src.name, "file_path": str(src), "error": str(exc)})
+                errors.append({"stage": "move", "file_name": src.name, "file_path": d.file_path, "error": str(exc)})
             if progress_cb:
                 progress_cb("Moving files", move_idx, len(docs))
     if not dry_run:
@@ -3783,6 +4019,8 @@ def run_pipeline(
         )
         est_10k = (elapsed / max(len(files), 1)) * 10000
         logging.info("Estimate for 10000 files: ~%ss", int(est_10k))
+    if staged_inputs is not None:
+        staged_inputs.cleanup()
 
 
 def run_pipeline_parallel(
@@ -3811,13 +4049,15 @@ def run_pipeline_parallel(
 
     run_id = time.strftime("%Y%m%d%H%M%S")
 
-    files = list_files(input_dir)
+    files, staged_inputs = list_files(input_dir)
     total_files = len(files)
     if limit is not None and limit > 0:
         files = files[:limit]
     processed_stats = scan_input_stats(files)
     if not files:
         logging.warning("No supported files found")
+        if staged_inputs is not None:
+            staged_inputs.cleanup()
         return
 
     t0 = time.time()
@@ -3832,6 +4072,7 @@ def run_pipeline_parallel(
     article_items: List[Tuple[str, str, Optional[np.ndarray]]] = []
     articles_by_doc: Dict[str, List[Tuple[str, str]]] = {}
     doc_hashes: Dict[str, str] = {}
+    doc_embeddings_by_id: Dict[str, Optional[np.ndarray]] = {}
     article_hashes: Dict[str, str] = {}
     doc_id_to_key: Dict[str, str] = {}
     article_id_to_key: Dict[str, str] = {}
@@ -3840,9 +4081,11 @@ def run_pipeline_parallel(
     errors_lock = threading.Lock()
     state_lock = threading.Lock()
 
-    def extract_and_embed(idx_path: Tuple[int, Path]) -> Tuple[int, Path, str, List[Tuple[str, str]], str, Optional[np.ndarray], List[Tuple[str, Optional[np.ndarray]]]]:
-        idx, path = idx_path
-        key = file_key(path)
+    def extract_and_embed(idx_path: Tuple[int, InputFile]) -> Tuple[int, InputFile, str, List[Tuple[str, str]], str, Optional[np.ndarray], List[Tuple[str, Optional[np.ndarray]]]]:
+        idx, input_file = idx_path
+        path = input_file.source_path
+        display_path = input_file.display_path
+        key = input_file.file_key
         with state_lock:
             cached = resume_files.get(key)
             doc_id = f"{run_id}-DOC-{idx:05d}"
@@ -3856,18 +4099,23 @@ def run_pipeline_parallel(
             cached["doc_id"] = doc_id
         else:
             try:
-                text, pdf_articles, extraction_status = process_file(path, ocrmypdf_enabled, articles_enabled)
+                text, pdf_articles, extraction_status = process_file(
+                    path,
+                    ocrmypdf_enabled,
+                    articles_enabled,
+                    source_label=display_path,
+                )
             except Exception as exc:
-                logging.exception("Failed to extract %s: %s", path, exc)
+                logging.exception("Failed to extract %s: %s", display_path, exc)
                 with errors_lock:
-                    errors.append({"stage": "extract", "file_name": path.name, "file_path": str(path), "error": str(exc)})
+                    errors.append({"stage": "extract", "file_name": path.name, "file_path": display_path, "error": str(exc)})
                 text = ""
                 pdf_articles = []
                 extraction_status = "no_text"
             with state_lock:
                 resume_files[key] = {
                     "doc_id": doc_id,
-                    "file_path": str(path),
+                    "file_path": display_path,
                     "file_name": path.name,
                     "ext": path.suffix.lower(),
                     "text": text,
@@ -3890,7 +4138,7 @@ def run_pipeline_parallel(
                     with state_lock:
                         resume_files[key]["doc_embedding"] = emb
                 except Exception as exc:
-                    logging.exception("Embedding failed for %s: %s", path, exc)
+                    logging.exception("Embedding failed for %s: %s", display_path, exc)
 
         art_embs: List[Tuple[str, Optional[np.ndarray]]] = []
         if articles_enabled:
@@ -3910,9 +4158,9 @@ def run_pipeline_parallel(
                             with state_lock:
                                 resume_files[key].setdefault("article_embeddings", {})[str(a_idx)] = aemb
                         except Exception as exc:
-                            logging.exception("Article embedding failed for %s: %s", path, exc)
+                            logging.exception("Article embedding failed for %s: %s", display_path, exc)
                             with errors_lock:
-                                errors.append({"stage": "article_embedding", "file_name": path.name, "file_path": str(path), "error": str(exc)})
+                                errors.append({"stage": "article_embedding", "file_name": path.name, "file_path": display_path, "error": str(exc)})
                 art_embs.append((article_id, aemb_vec))
 
         if use_resume:
@@ -3920,20 +4168,21 @@ def run_pipeline_parallel(
                 resume["files"] = resume_files
                 save_resume(output_dir, resume)
 
-        return idx, path, text, pdf_articles, extraction_status, (hsh, emb_vec), art_embs
+        return idx, input_file, text, pdf_articles, extraction_status, (hsh, emb_vec), art_embs
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [ex.submit(extract_and_embed, (i, p)) for i, p in enumerate(files, start=1)]
         for fut in as_completed(futures):
             try:
-                idx, path, text, pdf_articles, extraction_status, doc_hash_emb, art_embs = fut.result()
+                idx, input_file, text, pdf_articles, extraction_status, doc_hash_emb, art_embs = fut.result()
             except Exception as exc:
                 logging.exception("Worker failed: %s", exc)
                 with errors_lock:
                     errors.append({"stage": "worker", "file_name": "", "file_path": "", "error": str(exc)})
                 continue
+            path = input_file.source_path
             with state_lock:
-                doc_id = resume_files.get(file_key(path), {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
+                doc_id = resume_files.get(input_file.file_key, {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
             raw_texts[doc_id] = text
             extraction_statuses[doc_id] = extraction_status
             hsh, emb_vec = doc_hash_emb
@@ -3944,7 +4193,7 @@ def run_pipeline_parallel(
             if articles_enabled:
                 for a_idx, ((article_id, aemb_vec), (_title, body)) in enumerate(zip(art_embs, pdf_articles), start=1):
                     article_texts[article_id] = body
-                    key = file_key(path)
+                    key = input_file.file_key
                     article_id_to_key[article_id] = key
                     article_id_to_idx[article_id] = a_idx
                     ahash = hash_text(normalize_text(body))
@@ -3964,9 +4213,11 @@ def run_pipeline_parallel(
     docs: List[DocRecord] = []
     articles: List[ArticleRecord] = []
 
-    def summarize_doc(idx_path: Tuple[int, Path]) -> Tuple[int, Path, Dict[str, Any], bool]:
-        idx, path = idx_path
-        key = file_key(path)
+    def summarize_doc(idx_path: Tuple[int, InputFile]) -> Tuple[int, InputFile, Dict[str, Any], bool]:
+        idx, input_file = idx_path
+        path = input_file.source_path
+        display_path = input_file.display_path
+        key = input_file.file_key
         with state_lock:
             doc_id = resume_files.get(key, {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
         text = raw_texts.get(doc_id, "")
@@ -3984,9 +4235,9 @@ def run_pipeline_parallel(
                 with state_lock:
                     resume_files[key]["doc_summary"] = summary
             except Exception as exc:
-                logging.exception("Summarization failed for %s: %s", path, exc)
+                logging.exception("Summarization failed for %s: %s", display_path, exc)
                 with errors_lock:
-                    errors.append({"stage": "summarize", "file_name": path.name, "file_path": str(path), "error": str(exc)})
+                    errors.append({"stage": "summarize", "file_name": path.name, "file_path": display_path, "error": str(exc)})
                 summary = {}
                 used_fallback = False
         if dry_run or not text.strip() or low_text or cached.get("doc_summary"):
@@ -3995,7 +4246,7 @@ def run_pipeline_parallel(
             with state_lock:
                 resume["files"] = resume_files
                 save_resume(output_dir, resume)
-        return idx, path, summary, used_fallback
+        return idx, input_file, summary, used_fallback
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [ex.submit(summarize_doc, (i, p)) for i, p in enumerate(files, start=1)]
@@ -4003,19 +4254,21 @@ def run_pipeline_parallel(
         summary_fallback_flags: Dict[str, bool] = {}
         for fut in as_completed(futures):
             try:
-                idx, path, summary, used_fallback = fut.result()
+                idx, input_file, summary, used_fallback = fut.result()
             except Exception as exc:
                 logging.exception("Summarize worker failed: %s", exc)
                 with errors_lock:
                     errors.append({"stage": "summarize_worker", "file_name": "", "file_path": "", "error": str(exc)})
                 continue
             with state_lock:
-                doc_id = resume_files.get(file_key(path), {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
+                doc_id = resume_files.get(input_file.file_key, {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
             summaries[doc_id] = summary
             summary_fallback_flags[doc_id] = used_fallback
 
-    for idx, path in enumerate(files, start=1):
-        key = file_key(path)
+    for idx, input_file in enumerate(files, start=1):
+        path = input_file.source_path
+        display_path = input_file.display_path
+        key = input_file.file_key
         doc_id = resume_files.get(key, {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
         summary = summaries.get(doc_id, {})
         text = raw_texts.get(doc_id, "")
@@ -4062,7 +4315,8 @@ def run_pipeline_parallel(
                 doc_id=doc_id,
                 file_key=key,
                 file_name=path.name,
-                file_path=str(path),
+                file_path=display_path,
+                source_path=str(path),
                 file_ext=path.suffix.lower(),
                 category=category,
                 tags=tags,
@@ -4101,16 +4355,16 @@ def run_pipeline_parallel(
                         art_summary, _ = summarize_article_safe(cfg, body, path.name)
                         resume_files[key].setdefault("article_summaries", {})[str(a_idx)] = art_summary
                     except Exception as exc:
-                        logging.exception("Article summary failed for %s: %s", path, exc)
+                        logging.exception("Article summary failed for %s: %s", display_path, exc)
                         with errors_lock:
-                            errors.append({"stage": "article_summarize", "file_name": path.name, "file_path": str(path), "error": str(exc)})
+                            errors.append({"stage": "article_summarize", "file_name": path.name, "file_path": display_path, "error": str(exc)})
                         art_summary = ""
                 articles.append(
                     ArticleRecord(
                         doc_id=doc_id,
                         file_key=key,
                         file_name=path.name,
-                        file_path=str(path),
+                        file_path=display_path,
                         article_index=a_idx,
                         article_title=title,
                         article_summary=art_summary,
@@ -4205,7 +4459,7 @@ def run_pipeline_parallel(
 
     if not dry_run and not no_move:
         for d in docs:
-            src = Path(d.file_path)
+            src = Path(d.source_path)
             cat_folder = sanitize_folder(d.category)
             if d.review_group_id:
                 cluster_id = sanitize_folder(d.review_group_id)
@@ -4230,7 +4484,7 @@ def run_pipeline_parallel(
             except Exception as exc:
                 logging.exception("Failed to move %s: %s", src, exc)
                 with errors_lock:
-                    errors.append({"stage": "move", "file_name": src.name, "file_path": str(src), "error": str(exc)})
+                    errors.append({"stage": "move", "file_name": src.name, "file_path": d.file_path, "error": str(exc)})
     if not dry_run:
         try:
             write_duplicate_group_overviews(output_dir, docs)
@@ -4319,6 +4573,8 @@ def run_pipeline_parallel(
             len(files),
             int(est_total),
         )
+    if staged_inputs is not None:
+        staged_inputs.cleanup()
 
 
 def parse_args() -> argparse.Namespace:
@@ -4461,15 +4717,19 @@ def main() -> int:
             cfg.api_key = cfg.chat_api_key
     warn_missing_ocr_deps(ocrmypdf_enabled)
     try:
-        est_files = list_files(input_dir)
-        est_stats = scan_input_stats(est_files)
-        est_sec, est_source, settings_match = quick_estimate_runtime(
-            est_stats,
-            output_dir,
-            ocrmypdf_enabled,
-            embeddings_source,
-            cfg.chat_deployment,
-        )
+        est_files, est_staged_inputs = list_files(input_dir)
+        try:
+            est_stats = scan_input_stats(est_files)
+            est_sec, est_source, settings_match = quick_estimate_runtime(
+                est_stats,
+                output_dir,
+                ocrmypdf_enabled,
+                embeddings_source,
+                cfg.chat_deployment,
+            )
+        finally:
+            if est_staged_inputs is not None:
+                est_staged_inputs.cleanup()
         if is_gui_flow and messagebox is not None and est_sec:
             note = ""
             if est_source == "baseline" and not settings_match:
