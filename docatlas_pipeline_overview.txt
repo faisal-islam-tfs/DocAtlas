@@ -5,7 +5,7 @@
 - Scan input folder for supported files (.pdf, .doc, .docx, .ppt, .pptx, .xlsx)
 - Auto-unpack any .zip archives into a temporary staging area and include supported files found inside them
 - Store workbook-facing source paths relative to the selected input root
-- Skip unsupported types
+- Skip unsupported types for extraction, but record them for intake reporting
 - CLI can run with parallel workers (`--workers N`); GUI runs the progress-callback path
 
 2) Text extraction
@@ -58,7 +58,8 @@
     - in append mode, existing `Articles` sheet is preserved unchanged when article generation is disabled
 - *_docatlas_import.xlsx (standalone import sheet: Id, Path, Title, Content, Summary, Tags, Attachments, AutoPublish, ArticleType)
 - *_docatlas_full_text.xlsx (disabled by default; opt-in via --include-full-text-output)
-- summary_report.txt (counts, extraction status, token estimates, no-text list, file type breakdown, category %s, OCR usage, duplicate group stats, doc length stats, per-file errors)
+- summary_report.txt (counts, extraction status, token estimates, no-text list, file type breakdown, unsupported file counts, category %s, OCR usage, duplicate group stats, doc length stats, per-file errors)
+- unsupported_files_report.txt (datatype counts plus detailed unsupported file list with relative/logical paths)
 - duplicate_groups_overview.xlsx in each <category>_Duplicate folder (manual cluster assignment/review)
 - Optional: resume.json + last_run_stats.json
 

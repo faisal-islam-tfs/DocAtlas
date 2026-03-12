@@ -5,6 +5,7 @@ Input & Extraction
 - Supports .pdf, .doc, .docx, .ppt, .pptx, .xlsx
 - Auto-unpacks .zip archives into a temporary staging area and processes supported files inside them
 - Stores workbook-facing source paths relative to the selected input root
+- Records unsupported files from normal folders and zip contents for intake reporting
 - .doc auto-converted to .docx via LibreOffice (if installed)
 - PDF extraction via pdfplumber
 - OCR for PDFs: OCRmyPDF (non-forced pass, then forced pass only if needed) -> Tesseract fallback
@@ -41,6 +42,7 @@ Outputs
 - *_docatlas_import.xlsx (standalone import sheet for downstream KB import)
 - *_docatlas_full_text.xlsx (disabled by default; opt-in with --include-full-text-output)
 - summary_report.txt
+- unsupported_files_report.txt
 - duplicate_groups_overview.xlsx inside each <category>_Duplicate folder
 - resume.json (cache)
 - last_run_stats.json (baseline for estimates)
@@ -79,6 +81,7 @@ Reporting & Cost
 - No-text file list
 - Extraction status counts
 - File type breakdown and category percentages
+- Unsupported file counts by datatype and source kind, plus a dedicated unsupported file inventory report
 - OCR usage count and duplicate group stats
 - Document length stats (avg/longest/shortest)
 - Errors captured per file and reported without stopping the run

@@ -54,6 +54,8 @@ Notes:
   - legacy structure documented in `full_text_legacy_structure.txt`
 - `summary_report.txt`
   - counts by category, duplicates, extraction status
+- `unsupported_files_report.txt`
+  - unsupported datatype counts and detailed skipped-file inventory with relative/logical paths
 - In each `<category>_Duplicate` folder:
   - `duplicate_groups_overview.xlsx` (group-review tracker with `Group ID`, `Relation`, `FileName`, `Exact_sc`, `Near_sc`, `Assigned to`, `Action`)
 
@@ -272,8 +274,10 @@ python docatlas.py --input "C:\path\to\docs" --output "C:\path\to\out" --app "Se
 - `.zip` archives in the input tree are auto-unpacked into a temporary staging folder; supported files inside them are processed normally.
 - Workbook/report `FilePath` values are stored relative to the selected input root, not as machine-specific absolute paths.
 - Files discovered inside archives keep a logical relative path like `archive.zip!/inner/file.pdf` in reports and Excel outputs.
+- Unsupported files from normal folders and archive contents are skipped for extraction but recorded in `unsupported_files_report.txt`.
 - Tags are deduplicated and capped to a reasonable size.
 - `summary_report.txt` includes file type breakdown, category percentages, OCR usage count, duplicate group stats, and document length stats.
+- `summary_report.txt` also includes compact unsupported-file counts by datatype and source kind.
 - Errors are captured per file and reported in `summary_report.txt` without stopping the run.
 - `extraction_status` column values:
   - `ok`: text extracted normally

@@ -17,13 +17,15 @@ DocAtlas writes:
 
 3) summary_report.txt
 
-4) docatlas.log
+4) unsupported_files_report.txt
 
-5) resume.json (if resume enabled)
+5) docatlas.log
 
-6) last_run_stats.json
+6) resume.json (if resume enabled)
 
-7) duplicate_groups_overview.xlsx
+7) last_run_stats.json
+
+8) duplicate_groups_overview.xlsx
    - Created inside each <category>_Duplicate folder
    - Columns: Group ID, Relation, FileName, Exact_sc, Near_sc, Assigned to, Action
 
@@ -41,6 +43,20 @@ Import sheet mapping behavior
 - AutoPublish is always true.
 - `FilePath` values in review workbooks are relative to the selected input root.
 - For files coming from archives, source references in workbooks use a logical relative path like `archive.zip!/inner/file.pdf` rather than the temporary staging path.
+
+Unsupported file inventory
+--------------------------
+- `unsupported_files_report.txt` is always written per run.
+- It records unsupported files found in normal folders and inside `.zip` archives.
+- Each line includes:
+  - datatype / extension
+  - file name
+  - relative or logical source path
+  - source kind (`file`, `zip_member`, `invalid_zip`)
+- `summary_report.txt` also includes a compact unsupported-file summary:
+  - total unsupported files
+  - counts by datatype
+  - counts from normal folders vs zip members vs invalid zips
 
 Articles sheet behavior
 -----------------------
