@@ -414,6 +414,14 @@ class InputFile:
     file_key: str
 
 
+@dataclass
+class UnsupportedFileRecord:
+    file_name: str
+    file_path: str
+    file_type: str
+    source_kind: str
+
+
 def env(name: str, default: Optional[str] = None) -> Optional[str]:
     val = os.getenv(name)
     return val if val not in (None, "") else default
@@ -742,9 +750,19 @@ def build_safe_zip_target(base_dir: Path, member_name: str, used_targets: set[st
     return candidate
 
 
-def extract_zip_inputs(zip_path: Path, zip_display_path: str, staging_root: Path) -> Tuple[List[InputFile], List[Tuple[Path, str]]]:
+def _display_file_type(path_value: str) -> str:
+    ext = Path(path_value or "").suffix.lower()
+    return ext if ext else "[no extension]"
+
+
+def extract_zip_inputs(
+    zip_path: Path,
+    zip_display_path: str,
+    staging_root: Path,
+) -> Tuple[List[InputFile], List[Tuple[Path, str]], List[UnsupportedFileRecord]]:
     extracted_files: List[InputFile] = []
     nested_zips: List[Tuple[Path, str]] = []
+    unsupported_files: List[UnsupportedFileRecord] = []
     archive_slug = hashlib.sha1(zip_display_path.encode("utf-8", errors="ignore")).hexdigest()[:12]
     extract_dir = staging_root / archive_slug
     extract_dir.mkdir(parents=True, exist_ok=True)
@@ -780,8 +798,17 @@ def extract_zip_inputs(zip_path: Path, zip_display_path: str, staging_root: Path
                 )
             elif ext == ".zip":
                 nested_zips.append((target, member_display_path))
+            else:
+                unsupported_files.append(
+                    UnsupportedFileRecord(
+                        file_name=Path(member_rel).name,
+                        file_path=member_display_path,
+                        file_type=_display_file_type(member_rel),
+                        source_kind="zip_member",
+                    )
+                )
 
-    return extracted_files, nested_zips
+    return extracted_files, nested_zips, unsupported_files
 
 
 def relative_input_path(input_dir: Path, path: Path) -> str:
@@ -807,18 +834,28 @@ def path_compare_aliases(value: str) -> set[str]:
     return aliases
 
 
-def list_files(input_dir: Path) -> Tuple[List[InputFile], Optional[tempfile.TemporaryDirectory[str]]]:
+def list_files(input_dir: Path) -> Tuple[List[InputFile], List[UnsupportedFileRecord], Optional[tempfile.TemporaryDirectory[str]]]:
     files: List[InputFile] = []
     zip_files: List[Tuple[Path, str]] = []
+    unsupported_files: List[UnsupportedFileRecord] = []
     for p in input_dir.rglob("*"):
         if not p.is_file():
             continue
         ext = p.suffix.lower()
+        display_path = relative_input_path(input_dir, p)
         if ext in SUPPORTED_EXTS:
-            display_path = relative_input_path(input_dir, p)
             files.append(InputFile(source_path=p, display_path=display_path, file_key=file_key(p, display_path)))
         elif ext == ".zip":
-            zip_files.append((p, relative_input_path(input_dir, p)))
+            zip_files.append((p, display_path))
+        else:
+            unsupported_files.append(
+                UnsupportedFileRecord(
+                    file_name=p.name,
+                    file_path=display_path,
+                    file_type=_display_file_type(display_path),
+                    source_kind="file",
+                )
+            )
 
     temp_dir: Optional[tempfile.TemporaryDirectory[str]] = None
     if zip_files:
@@ -828,18 +865,36 @@ def list_files(input_dir: Path) -> Tuple[List[InputFile], Optional[tempfile.Temp
         while pending:
             zip_path, zip_display_path = pending.pop(0)
             try:
-                staged_files, nested_zips = extract_zip_inputs(zip_path, zip_display_path, staging_root)
+                staged_files, nested_zips, zip_unsupported = extract_zip_inputs(zip_path, zip_display_path, staging_root)
             except zipfile.BadZipFile:
                 logging.warning("Skipping invalid zip archive: %s", zip_display_path)
+                unsupported_files.append(
+                    UnsupportedFileRecord(
+                        file_name=Path(zip_display_path).name,
+                        file_path=zip_display_path,
+                        file_type=".zip",
+                        source_kind="invalid_zip",
+                    )
+                )
                 continue
             except Exception as exc:
                 logging.warning("Failed to extract zip archive %s: %s", zip_display_path, exc)
+                unsupported_files.append(
+                    UnsupportedFileRecord(
+                        file_name=Path(zip_display_path).name,
+                        file_path=zip_display_path,
+                        file_type=".zip",
+                        source_kind="invalid_zip",
+                    )
+                )
                 continue
             files.extend(staged_files)
             pending.extend(nested_zips)
+            unsupported_files.extend(zip_unsupported)
 
     files.sort(key=lambda item: item.display_path.lower())
-    return files, temp_dir
+    unsupported_files.sort(key=lambda item: (item.file_type, item.file_path.lower()))
+    return files, unsupported_files, temp_dir
 
 
 def scan_input_stats(files: List[InputFile]) -> Dict[str, Any]:
@@ -855,6 +910,37 @@ def scan_input_stats(files: List[InputFile]) -> Dict[str, Any]:
         by_ext[ext] = by_ext.get(ext, 0) + 1
     total_size_mb = total_size / (1024 * 1024)
     return {"count": len(files), "total_size_mb": total_size_mb, "by_ext": by_ext}
+
+
+def unsupported_file_stats(items: List[UnsupportedFileRecord]) -> Dict[str, Any]:
+    by_type: Dict[str, int] = {}
+    by_source_kind: Dict[str, int] = {}
+    for item in items:
+        by_type[item.file_type] = by_type.get(item.file_type, 0) + 1
+        by_source_kind[item.source_kind] = by_source_kind.get(item.source_kind, 0) + 1
+    return {"count": len(items), "by_type": by_type, "by_source_kind": by_source_kind}
+
+
+def write_unsupported_files_report(out_dir: Path, items: List[UnsupportedFileRecord]) -> Path:
+    report_path = out_dir / "unsupported_files_report.txt"
+    stats = unsupported_file_stats(items)
+    lines = [
+        "Unsupported Files Report",
+        "========================",
+        f"Total unsupported files: {stats['count']}",
+        "",
+        "Unsupported by Datatype:",
+    ]
+    for file_type in sorted(stats["by_type"].keys()):
+        lines.append(f"- {file_type}: {stats['by_type'][file_type]}")
+    lines.extend(["", "Unsupported by Source Kind:"])
+    for source_kind in sorted(stats["by_source_kind"].keys()):
+        lines.append(f"- {source_kind}: {stats['by_source_kind'][source_kind]}")
+    lines.extend(["", "Detailed List:"])
+    for item in items:
+        lines.append(f"- {item.file_type} | {item.file_name} | {item.file_path}")
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+    return report_path
 
 
 def load_last_run_stats(out_dir: Path) -> Optional[Dict[str, Any]]:
@@ -3223,6 +3309,7 @@ def write_summary_report(
     out_dir: Path,
     docs: List[DocRecord],
     articles: List[ArticleRecord],
+    unsupported_files: Optional[List[UnsupportedFileRecord]] = None,
     errors: Optional[List[Dict[str, str]]] = None,
     usage: Optional[Dict[str, int]] = None,
     total_files: Optional[int] = None,
@@ -3265,6 +3352,7 @@ def write_summary_report(
     near_dup_docs = sum(1 for d in docs if d.near_duplicate_of or d.near_duplicate_group_id)
     near_dup_group_count = len({d.near_duplicate_group_id for d in docs if d.near_duplicate_group_id})
     review_group_count = len({d.review_group_id for d in docs if d.review_group_id})
+    unsupported_stats = unsupported_file_stats(unsupported_files or [])
 
     lines = []
     lines.append("Summary Report")
@@ -3283,6 +3371,15 @@ def write_summary_report(
     for k in sorted(ext_counts.keys()):
         pct = (ext_counts[k] / total_docs * 100) if total_docs else 0
         lines.append(f"- {k}: {ext_counts[k]} ({pct:.1f}%)")
+    lines.append("")
+    lines.append("Unsupported Files:")
+    lines.append(f"- total_unsupported_files: {unsupported_stats['count']}")
+    if unsupported_stats["by_source_kind"]:
+        lines.append(f"- normal_folder_count: {unsupported_stats['by_source_kind'].get('file', 0)}")
+        lines.append(f"- zip_member_count: {unsupported_stats['by_source_kind'].get('zip_member', 0)}")
+        lines.append(f"- invalid_zip_count: {unsupported_stats['by_source_kind'].get('invalid_zip', 0)}")
+    for file_type in sorted(unsupported_stats["by_type"].keys()):
+        lines.append(f"- {file_type}: {unsupported_stats['by_type'][file_type]}")
     lines.append("")
     lines.append("Document Length (approx):")
     lines.append(f"- avg_words: {avg_words}")
@@ -3531,7 +3628,7 @@ def run_pipeline(
 
     reset_usage()
 
-    files, staged_inputs = list_files(input_dir)
+    files, unsupported_files, staged_inputs = list_files(input_dir)
     total_files = len(files)
     input_stats = scan_input_stats(files)
     if limit is not None and limit > 0:
@@ -3539,6 +3636,13 @@ def run_pipeline(
     processed_stats = scan_input_stats(files)
     if not files:
         logging.warning("No supported files found")
+        try:
+            unsupported_report_path = write_unsupported_files_report(output_dir, unsupported_files)
+            logging.info("Wrote unsupported files report: %s", unsupported_report_path)
+            report_path = write_summary_report(output_dir, [], [], unsupported_files, [], get_usage(), total_files, len(files), limit)
+            logging.info("Wrote %s", report_path)
+        except Exception as exc:
+            logging.exception("Failed to write unsupported/summary reports: %s", exc)
         if staged_inputs is not None:
             staged_inputs.cleanup()
         return
@@ -3986,7 +4090,9 @@ def run_pipeline(
         errors.append({"stage": "write_excel", "file_name": "", "file_path": str(output_dir), "error": str(exc)})
     usage = get_usage()
     try:
-        report_path = write_summary_report(output_dir, docs, articles, errors, usage, total_files, len(files), limit)
+        unsupported_report_path = write_unsupported_files_report(output_dir, unsupported_files)
+        logging.info("Wrote unsupported files report: %s", unsupported_report_path)
+        report_path = write_summary_report(output_dir, docs, articles, unsupported_files, errors, usage, total_files, len(files), limit)
         logging.info("Wrote %s", report_path)
     except Exception as exc:
         logging.exception("Failed to write summary report: %s", exc)
@@ -4049,13 +4155,20 @@ def run_pipeline_parallel(
 
     run_id = time.strftime("%Y%m%d%H%M%S")
 
-    files, staged_inputs = list_files(input_dir)
+    files, unsupported_files, staged_inputs = list_files(input_dir)
     total_files = len(files)
     if limit is not None and limit > 0:
         files = files[:limit]
     processed_stats = scan_input_stats(files)
     if not files:
         logging.warning("No supported files found")
+        try:
+            unsupported_report_path = write_unsupported_files_report(output_dir, unsupported_files)
+            logging.info("Wrote unsupported files report: %s", unsupported_report_path)
+            report_path = write_summary_report(output_dir, [], [], unsupported_files, [], get_usage(), total_files, len(files), limit)
+            logging.info("Wrote %s", report_path)
+        except Exception as exc:
+            logging.exception("Failed to write unsupported/summary reports: %s", exc)
         if staged_inputs is not None:
             staged_inputs.cleanup()
         return
@@ -4542,7 +4655,9 @@ def run_pipeline_parallel(
             errors.append({"stage": "write_excel", "file_name": "", "file_path": str(output_dir), "error": str(exc)})
     usage = get_usage()
     try:
-        report_path = write_summary_report(output_dir, docs, articles, errors, usage, total_files, len(files), limit)
+        unsupported_report_path = write_unsupported_files_report(output_dir, unsupported_files)
+        logging.info("Wrote unsupported files report: %s", unsupported_report_path)
+        report_path = write_summary_report(output_dir, docs, articles, unsupported_files, errors, usage, total_files, len(files), limit)
         logging.info("Wrote %s", report_path)
     except Exception as exc:
         logging.exception("Failed to write summary report: %s", exc)
@@ -4717,7 +4832,7 @@ def main() -> int:
             cfg.api_key = cfg.chat_api_key
     warn_missing_ocr_deps(ocrmypdf_enabled)
     try:
-        est_files, est_staged_inputs = list_files(input_dir)
+        est_files, _est_unsupported_files, est_staged_inputs = list_files(input_dir)
         try:
             est_stats = scan_input_stats(est_files)
             est_sec, est_source, settings_match = quick_estimate_runtime(

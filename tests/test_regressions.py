@@ -111,20 +111,39 @@ class DocAtlasRegressionTests(unittest.TestCase):
             input_dir / "sub" / "direct.xlsx",
             " ".join(["direct workbook content"] * 20),
         )
+        (input_dir / "sub" / "skip.url").write_text("[InternetShortcut]\nURL=https://example.com\n", encoding="utf-8")
         bundle_path = input_dir / "bundle.zip"
         with zipfile.ZipFile(bundle_path, "w") as zf:
             zf.writestr(
                 "nested/inside.xlsx",
                 make_workbook_bytes(" ".join(["zipped workbook content"] * 20)),
             )
+            zf.writestr("nested/clip.mp4", b"not really a movie")
 
-        files, staged = docatlas.list_files(input_dir)
+        files, unsupported, staged = docatlas.list_files(input_dir)
         try:
             display_paths = [item.display_path for item in files]
             self.assertEqual(
                 display_paths,
                 ["bundle.zip!/nested/inside.xlsx", "sub/direct.xlsx"],
             )
+            unsupported_map = {(item.file_type, item.file_path, item.source_kind) for item in unsupported}
+            self.assertIn((".url", "sub/skip.url", "file"), unsupported_map)
+            self.assertIn((".mp4", "bundle.zip!/nested/clip.mp4", "zip_member"), unsupported_map)
+        finally:
+            if staged is not None:
+                staged.cleanup()
+
+    def test_list_files_records_invalid_zip_as_unsupported(self) -> None:
+        input_dir = self.make_tempdir()
+        (input_dir / "broken.zip").write_text("not a real zip", encoding="utf-8")
+
+        files, unsupported, staged = docatlas.list_files(input_dir)
+        try:
+            self.assertEqual(files, [])
+            self.assertEqual(len(unsupported), 1)
+            self.assertEqual(unsupported[0].file_path, "broken.zip")
+            self.assertEqual(unsupported[0].source_kind, "invalid_zip")
         finally:
             if staged is not None:
                 staged.cleanup()
@@ -267,6 +286,10 @@ class DocAtlasRegressionTests(unittest.TestCase):
             sorted(docs_df["FilePath"].astype(str).tolist()),
             ["bundle.zip!/nested/inside.xlsx", "sub/direct.xlsx"],
         )
+        summary_text = (output_dir / "summary_report.txt").read_text(encoding="utf-8")
+        unsupported_text = (output_dir / "unsupported_files_report.txt").read_text(encoding="utf-8")
+        self.assertIn("total_unsupported_files: 0", summary_text)
+        self.assertIn("Total unsupported files: 0", unsupported_text)
 
     def test_run_pipeline_parallel_writes_no_articles_sheet(self) -> None:
         root = self.make_tempdir()
@@ -309,6 +332,44 @@ class DocAtlasRegressionTests(unittest.TestCase):
             sorted(docs_df["FilePath"].astype(str).tolist()),
             ["a/one.xlsx", "bundle.zip!/nested/two.xlsx"],
         )
+
+    def test_run_pipeline_writes_unsupported_reports_for_only_skipped_files(self) -> None:
+        root = self.make_tempdir()
+        input_dir = root / "input"
+        output_dir = root / "output"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        (input_dir / "link.url").write_text("[InternetShortcut]\nURL=https://example.com\n", encoding="utf-8")
+        (input_dir / "movie.mp4").write_bytes(b"fake")
+        (input_dir / "broken.zip").write_text("not a zip", encoding="utf-8")
+
+        docatlas.run_pipeline(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            categories=["Other"],
+            cfg=dummy_cfg(),
+            dry_run=True,
+            use_resume=False,
+            ocrmypdf_enabled=False,
+            app_name="TestApp",
+            embeddings_source="document",
+            append_excel=False,
+            category_path_map=self.category_path_map(),
+            include_full_text_output=False,
+            no_move=True,
+            articles_enabled=False,
+        )
+        self.addCleanup(logging.shutdown)
+
+        self.assertFalse((output_dir / "TestApp__docatlas_summaries.xlsx").exists())
+        summary_text = (output_dir / "summary_report.txt").read_text(encoding="utf-8")
+        unsupported_text = (output_dir / "unsupported_files_report.txt").read_text(encoding="utf-8")
+        self.assertIn("total_unsupported_files: 3", summary_text)
+        self.assertIn("- .mp4: 1", summary_text)
+        self.assertIn("- .url: 1", summary_text)
+        self.assertIn("- .zip: 1", summary_text)
+        self.assertIn("Detailed List:", unsupported_text)
+        self.assertIn(".url | link.url | link.url", unsupported_text)
+        self.assertIn(".zip | broken.zip | broken.zip", unsupported_text)
 
 
 if __name__ == "__main__":
