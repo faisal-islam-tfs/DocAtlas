@@ -219,6 +219,20 @@ The default config is `applications.json` in the same folder. You can override i
 python docatlas.py --config "C:\path\to\applications.json" --input "C:\path\to\docs" --output "C:\path\to\out" --app "qPCR"
 ```
 
+### Create App Folder Structure From Config
+To pre-create a stable DocAtlas NAS layout from `applications.json`:
+
+```bash
+python build_app_folder_structure.py --base /mnt/nas/faisal/DocAtlas --config ./applications.json
+```
+
+This creates:
+- `/mnt/nas/faisal/DocAtlas/input/<app_slug>`
+- `/mnt/nas/faisal/DocAtlas/output/<app_slug>/charter`
+- `/mnt/nas/faisal/DocAtlas/output/<app_slug>/atlas`
+- `/mnt/nas/faisal/DocAtlas/archive/zips`
+- `/mnt/nas/faisal/DocAtlas/archive/old_runs`
+
 ### Options
 - `--dry-run`: do not call APIs or move files (hash-based duplicates only)
 - `--no-resume`: disable resume cache

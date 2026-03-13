@@ -2,6 +2,7 @@ import gzip
 import io
 import json
 import logging
+import subprocess
 import tempfile
 import unittest
 import zipfile
@@ -537,6 +538,38 @@ class DocAtlasRegressionTests(unittest.TestCase):
         self.assertTrue(no_move)
         self.assertTrue(articles_enabled)
         self.assertEqual(workers, 2)
+
+    def test_build_app_folder_structure_script_creates_expected_layout(self) -> None:
+        root = self.make_tempdir()
+        base_dir = root / "DocAtlas"
+        config_path = root / "applications.json"
+        config_path.write_text(
+            json.dumps({"applications": {"Molecular Biology": ["Other"], "qPCR": ["Other"]}}),
+            encoding="utf-8",
+        )
+
+        result = subprocess.run(
+            [
+                "python",
+                "build_app_folder_structure.py",
+                "--base",
+                str(base_dir),
+                "--config",
+                str(config_path),
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        self.assertTrue((base_dir / "input" / "molecular_biology").exists())
+        self.assertTrue((base_dir / "output" / "molecular_biology" / "charter").exists())
+        self.assertTrue((base_dir / "output" / "molecular_biology" / "atlas").exists())
+        self.assertTrue((base_dir / "input" / "qpcr").exists())
+        self.assertTrue((base_dir / "archive" / "zips").exists())
+        self.assertIn("Molecular Biology -> molecular_biology", result.stdout)
+        self.assertIn("qPCR -> qpcr", result.stdout)
 
 
 if __name__ == "__main__":
