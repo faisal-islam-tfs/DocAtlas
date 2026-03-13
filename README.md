@@ -49,9 +49,10 @@ Notes:
 - `{application}__docatlas_import.xlsx` (falls back to `uncategorized__docatlas_import.xlsx`)
   - `import` sheet:
     - `Id`, `Path`, `Title`, `Content`, `Summary`, `Tags`, `Attachments`, `AutoPublish`, `ArticleType`
-- `{application}__docatlas_full_text.xlsx` is disabled by default
-  - re-enable with `--include-full-text-output`
-  - legacy structure documented in `full_text_legacy_structure.txt`
+- `{application}__docatlas_full_text.jsonl.gz`
+  - written by default on every run
+  - one JSON object per document, gzip-compressed
+  - legacy Excel structure documented historically in `full_text_legacy_structure.txt`
 - `summary_report.txt`
   - counts by category, duplicates, extraction status
 - `unsupported_files_report.txt`
@@ -226,7 +227,7 @@ python docatlas.py --config "C:\path\to\applications.json" --input "C:\path\to\d
 - `--articles`: enable PDF article generation (disabled by default)
 - `--no-articles`: deprecated compatibility alias (default is already no-article mode)
 - `--category-path-map`: path to `category_path_map.json` for import `Path` mapping
-- `--include-full-text-output`: write full-text workbook (disabled by default)
+- `--include-full-text-output`: deprecated compatibility flag; full-text JSONL.GZ archive is now always written
 - `--embeddings-source summary|full_text|none`: choose embeddings input (default: `full_text`)
 - `--overwrite-excel`: overwrite Excel outputs instead of appending (default is append)
 - `--limit N`: process only the first N files (useful for time estimation)
@@ -275,6 +276,7 @@ python docatlas.py --input "C:\path\to\docs" --output "C:\path\to\out" --app "Se
 - Workbook/report `FilePath` values are stored relative to the selected input root, not as machine-specific absolute paths.
 - Files discovered inside archives keep a logical relative path like `archive.zip!/inner/file.pdf` in reports and Excel outputs.
 - Unsupported files from normal folders and archive contents are skipped for extraction but recorded in `unsupported_files_report.txt`.
+- Full extracted document text is archived by default in `<app>__docatlas_full_text.jsonl.gz`.
 - Tags are deduplicated and capped to a reasonable size.
 - `summary_report.txt` includes file type breakdown, category percentages, OCR usage count, duplicate group stats, and document length stats.
 - `summary_report.txt` also includes compact unsupported-file counts by datatype and source kind.
@@ -305,8 +307,11 @@ If these are not installed, the tool will still run and mark `extraction_status`
 
 The tool will warn at startup if OCR dependencies are missing.
 
-### Excel Full Text
-Full-text workbook output is disabled by default.
-- Re-enable with: `--include-full-text-output`
-- Legacy structure is documented in `full_text_legacy_structure.txt`
+### Full Text Archive
+Full extracted document text is written by default as `<app>__docatlas_full_text.jsonl.gz`.
+- One JSON object per document
+- Gzip-compressed for lower storage use
+- Decompress with standard tools such as `gzip -cd` or `gunzip`
+- `--include-full-text-output` is now a deprecated compatibility flag and does not change behavior
+- Legacy Excel structure is documented in `full_text_legacy_structure.txt`
 

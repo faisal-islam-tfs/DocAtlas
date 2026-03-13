@@ -5,12 +5,13 @@ DocAtlas document processing pipeline:
 - Auto-unpack zip archives into a staging area and process supported contents
 - Summarize, categorize, tag with Azure OpenAI
 - Detect duplicates via hashes + embeddings
-- Output Excel files (peers + full_text)
+- Output review Excel files plus a compressed full-text archive
 - Move files into category folders (duplicates to <category>_Duplicate)
 """
 from __future__ import annotations
 
 import argparse
+import gzip
 import html
 import io
 import hashlib
@@ -140,7 +141,7 @@ RESUME_FILENAME = "resume.json"
 LAST_RUN_STATS_FILENAME = "last_run_stats.json"
 DEFAULT_EMBEDDINGS_SOURCE = "full_text"
 DEFAULT_CATEGORY_PATH_MAP_FILENAME = "category_path_map.json"
-DEFAULT_INCLUDE_FULL_TEXT_OUTPUT = False
+DEFAULT_INCLUDE_FULL_TEXT_OUTPUT = True
 DEFAULT_ESTIMATE_SEC_PER_FILE = 50.0
 DEFAULT_ESTIMATE_SEC_PER_MB = 1.5
 EMBEDDINGS_SOURCE_NONE = "none"
@@ -1565,6 +1566,9 @@ def write_full_text_legacy_structure_note(out_dir: Path) -> Path:
     text = (
         "Legacy Full Text Workbook Structure\n"
         "==================================\n\n"
+        "Current status:\n"
+        "- DocAtlas now writes full text as <app_slug>__docatlas_full_text.jsonl.gz by default.\n"
+        "- The Excel full-text workbook below is retained here for historical reference only.\n\n"
         "Workbook name pattern:\n"
         "- <app_slug>__docatlas_full_text.xlsx\n\n"
         "Sheet:\n"
@@ -1575,13 +1579,57 @@ def write_full_text_legacy_structure_note(out_dir: Path) -> Path:
         "  full_text, full_text_parts_count, full_text_part_1..N,\n"
         "  moved_to, file_name, file_path\n\n"
         "Purpose:\n"
-        "- Preserve complete extracted document text split into Excel-safe chunks.\n\n"
-        "Status:\n"
-        "- Full-text workbook output is currently disabled by default.\n"
-        "- Re-enable by running with --include-full-text-output.\n"
+        "- Historical workbook layout used before the default JSONL.GZ archive.\n"
     )
     note_path.write_text(text, encoding="utf-8")
     return note_path
+
+
+def iter_full_text_archive_records(path: Path) -> Iterable[Dict[str, Any]]:
+    if not path.exists():
+        return
+    with gzip.open(path, "rt", encoding="utf-8") as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(record, dict):
+                yield record
+
+
+def write_full_text_archive(
+    out_dir: Path,
+    app_name: Optional[str],
+    full_text_rows: List[Dict[str, Any]],
+    append_excel: bool,
+) -> Path:
+    app_slug = sanitize_folder(app_name or "uncategorized")
+    full_text_path = out_dir / f"{app_slug}__docatlas_full_text.jsonl.gz"
+    rows_to_write = full_text_rows
+
+    if append_excel and full_text_path.exists():
+        existing_keys: set[str] = set()
+        try:
+            for record in iter_full_text_archive_records(full_text_path):
+                file_key = str(record.get("file_key", "")).strip()
+                if file_key:
+                    existing_keys.add(file_key)
+        except OSError:
+            existing_keys = set()
+            append_excel = False
+        if existing_keys:
+            rows_to_write = [row for row in full_text_rows if str(row.get("file_key", "")).strip() not in existing_keys]
+
+    mode = "at" if append_excel and full_text_path.exists() else "wt"
+    with gzip.open(full_text_path, mode, encoding="utf-8") as fh:
+        for row in rows_to_write:
+            fh.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")))
+            fh.write("\n")
+    return full_text_path
 
 
 def ocr_image_bytes(image_bytes: bytes) -> str:
@@ -2805,6 +2853,161 @@ def get_articles_mode_gui() -> bool:
     return result[0] if result else False
 
 
+def argv_has_flag(argv_tokens: List[str], flag: str) -> bool:
+    prefix = flag + "="
+    return any(tok == flag or tok.startswith(prefix) for tok in argv_tokens)
+
+
+def prompt_text_cli(prompt: str, default: Optional[str] = None, allow_empty: bool = False) -> str:
+    suffix = f" [{default}]" if default not in (None, "") else ""
+    while True:
+        value = input(f"{prompt}{suffix}: ").strip()
+        if not value and default is not None:
+            value = default
+        if value or allow_empty:
+            return value
+        print("Value required.")
+
+
+def prompt_path_cli(prompt: str, default: Optional[str] = None, must_exist: bool = False) -> Path:
+    while True:
+        path = Path(prompt_text_cli(prompt, default=default)).expanduser()
+        if must_exist and not path.exists():
+            print(f"Path not found: {path}")
+            continue
+        return path
+
+
+def prompt_choice_cli(prompt: str, options: List[Tuple[str, Any]], default_index: int = 1) -> Any:
+    print(prompt)
+    for idx, (label, _value) in enumerate(options, start=1):
+        print(f"  {idx}) {label}")
+    while True:
+        raw = input(f"Select option [{default_index}]: ").strip()
+        if not raw:
+            return options[default_index - 1][1]
+        if raw.isdigit():
+            idx = int(raw)
+            if 1 <= idx <= len(options):
+                return options[idx - 1][1]
+        print("Enter a valid option number.")
+
+
+def prompt_yes_no_cli(prompt: str, default: bool) -> bool:
+    suffix = "[Y/n]" if default else "[y/N]"
+    while True:
+        raw = input(f"{prompt} {suffix}: ").strip().lower()
+        if not raw:
+            return default
+        if raw in ("y", "yes"):
+            return True
+        if raw in ("n", "no"):
+            return False
+        print("Enter y or n.")
+
+
+def prompt_int_cli(prompt: str, default: int, min_value: int = 1) -> int:
+    while True:
+        raw = prompt_text_cli(prompt, default=str(default))
+        try:
+            value = int(raw)
+        except ValueError:
+            print("Enter a whole number.")
+            continue
+        if value < min_value:
+            print(f"Value must be >= {min_value}.")
+            continue
+        return value
+
+
+def get_categories_cli(app_config: Dict[str, List[str]]) -> Tuple[List[str], Optional[str]]:
+    if app_config:
+        options: List[Tuple[str, str]] = [(app, app) for app in sorted(app_config.keys())]
+        options.append(("Custom categories (semicolon-separated)", "__custom__"))
+        selected = prompt_choice_cli("Application", options, default_index=1)
+        if selected != "__custom__":
+            return list(app_config[selected]), selected
+    raw = prompt_text_cli("Categories separated by semicolons")
+    categories = [c.strip() for c in raw.split(";") if c.strip()]
+    if not categories:
+        raise ValueError("At least one category is required")
+    return categories, None
+
+
+def resolve_cli_interactive_inputs(
+    args: argparse.Namespace,
+    argv_tokens: List[str],
+    app_config: Dict[str, List[str]],
+) -> Tuple[Path, Path, List[str], Optional[str], bool, str, bool, bool, bool, int]:
+    if not sys.stdin.isatty():
+        raise RuntimeError("--interactive requires a terminal")
+
+    input_dir = Path(args.input).expanduser() if args.input else prompt_path_cli("Input folder", must_exist=True)
+    output_dir = Path(args.output).expanduser() if args.output else prompt_path_cli("Output folder", default=str(input_dir))
+
+    if args.categories:
+        categories = [c.strip() for c in args.categories.split(";") if c.strip()]
+        if not categories:
+            raise ValueError("Provide at least one category in --categories")
+        app_name = None
+    elif args.app and args.app in app_config:
+        categories = list(app_config[args.app])
+        app_name = args.app
+    else:
+        if args.app:
+            print(f"Application not found in config: {args.app}")
+        categories, app_name = get_categories_cli(app_config)
+
+    if args.charter_mode or args.signal_scan or args.no_move:
+        no_move = True
+    else:
+        no_move = prompt_choice_cli(
+            "Run mode",
+            [
+                ("Charter mode (recommended: no file moves)", True),
+                ("Atlas mode (move files into output folders)", False),
+            ],
+            default_index=1,
+        )
+
+    ocrmypdf_enabled = (not args.no_ocrmypdf) if argv_has_flag(argv_tokens, "--no-ocrmypdf") else prompt_yes_no_cli(
+        "Enable OCR when PDFs have little or no text?",
+        True,
+    )
+
+    embeddings_source = (
+        resolve_embeddings_source(args.embeddings_source)
+        if argv_has_flag(argv_tokens, "--embeddings-source")
+        else prompt_choice_cli(
+            "Embeddings source",
+            [
+                ("Full text (recommended, stricter duplicate detection)", "full_text"),
+                ("Long summary (lower cost)", "summary"),
+                ("Disable embeddings (hash-only duplicates)", EMBEDDINGS_SOURCE_NONE),
+            ],
+            default_index=1,
+        )
+    )
+
+    append_excel = (not args.overwrite_excel) if argv_has_flag(argv_tokens, "--overwrite-excel") else prompt_choice_cli(
+        "Excel write mode",
+        [
+            ("Append to existing outputs (recommended)", True),
+            ("Overwrite existing outputs", False),
+        ],
+        default_index=1,
+    )
+
+    articles_enabled = bool(args.articles) if argv_has_flag(argv_tokens, "--articles") else prompt_yes_no_cli(
+        "Enable article generation for PDFs?",
+        False,
+    )
+
+    workers = args.workers if argv_has_flag(argv_tokens, "--workers") else prompt_int_cli("Workers", default=1, min_value=1)
+
+    return input_dir, output_dir, categories, app_name, ocrmypdf_enabled, embeddings_source, append_excel, no_move, articles_enabled, workers
+
+
 def edit_applications_gui(config_path: Path, app_config: Dict[str, List[str]], parent: tk.Tk) -> None:
     if tk is None:
         return
@@ -2983,12 +3186,11 @@ def write_excels(
 ) -> Tuple[Path, Optional[Path], Path]:
     app_slug = sanitize_folder(app_name or "uncategorized")
     peers_path = out_dir / f"{app_slug}__docatlas_summaries.xlsx"
-    full_text_path = out_dir / f"{app_slug}__docatlas_full_text.xlsx" if include_full_text_output else None
+    full_text_path = out_dir / f"{app_slug}__docatlas_full_text.jsonl.gz"
 
     existing_docs_df = None
     existing_dups_df = None
     existing_articles_df = None
-    existing_full_df = None
     existing_doc_keys: set[str] = set()
     existing_doc_paths: set[str] = set()
 
@@ -3015,12 +3217,6 @@ def write_excels(
             existing_articles_df = pd.read_excel(peers_path, sheet_name="Articles")
         except Exception:
             existing_articles_df = None
-
-    if include_full_text_output and append_excel and full_text_path is not None and full_text_path.exists():
-        try:
-            existing_full_df = pd.read_excel(full_text_path, sheet_name="FullText")
-        except Exception:
-            existing_full_df = None
 
     docs_rows: List[Dict[str, Any]] = []
     new_docs: List[DocRecord] = []
@@ -3218,38 +3414,8 @@ def write_excels(
         )
     import_path = write_import_excel(out_dir, app_name, import_rows, append_excel)
 
-    if include_full_text_output and full_text_path is not None:
-        # Expand full_text parts into separate columns to avoid Excel 32,767 char limit
-        expanded_rows: List[Dict[str, Any]] = []
-        max_parts = 1
-        for row in full_text_rows:
-            row_copy = dict(row)
-            parts = row_copy.pop("full_text_parts", [])
-            max_parts = max(max_parts, len(parts))
-            row_copy["_parts"] = parts
-            expanded_rows.append(row_copy)
-
-        for row in expanded_rows:
-            parts = row.pop("_parts", [])
-            for i in range(max_parts):
-                key = f"full_text_part_{i+1}"
-                row[key] = parts[i] if i < len(parts) else ""
-
-        full_df = sanitize_excel_df(pd.DataFrame(expanded_rows))
-        if append_excel and (existing_doc_keys or existing_doc_paths):
-            if "file_key" in full_df.columns and existing_doc_keys:
-                full_df = full_df[~full_df["file_key"].astype(str).isin(existing_doc_keys)]
-            if "file_path" in full_df.columns and existing_doc_paths:
-                full_df = full_df[
-                    ~full_df["file_path"].astype(str).map(lambda x: normalize_compare_path(x) in existing_doc_paths)
-                ]
-        if append_excel and existing_full_df is not None:
-            full_df = pd.concat([existing_full_df, full_df], ignore_index=True)
-
-        with pd.ExcelWriter(full_text_path, engine="openpyxl") as writer:
-            full_df.to_excel(writer, index=False, sheet_name="FullText")
-    else:
-        write_full_text_legacy_structure_note(out_dir)
+    full_text_path = write_full_text_archive(out_dir, app_name, full_text_rows, append_excel)
+    write_full_text_legacy_structure_note(out_dir)
 
     # Apply formatting: wrap summaries and widen columns
     try:
@@ -3297,8 +3463,6 @@ def write_excels(
         if articles_sheet_status in ("written", "preserved"):
             format_sheet(peers_path, "Articles", ["FilePath", "ArticleTitle", "ArticleSummary"])
         format_sheet(import_path, "import", ["Path", "Title", "Content", "Summary", "Tags", "Attachments", "ArticleType"])
-        if include_full_text_output and full_text_path is not None:
-            format_sheet(full_text_path, "FullText", ["short_summary", "long_summary", "full_text"])
     except Exception:
         pass
 
@@ -4043,11 +4207,12 @@ def run_pipeline(
     full_text_rows: List[Dict[str, Any]] = []
     for d in docs:
         text = raw_texts.get(d.doc_id, "")
-        parts = split_for_excel(text)
         full_text_rows.append(
             {
                 "doc_id": d.doc_id,
                 "file_key": d.file_key,
+                "file_name": d.file_name,
+                "file_path": d.file_path,
                 "category": d.category,
                 "short_summary": d.short_summary,
                 "long_summary": d.long_summary,
@@ -4056,12 +4221,8 @@ def run_pipeline(
                 "char_count": d.char_count,
                 "extraction_status": d.extraction_status,
                 "review_flags": d.review_flags,
-                "full_text": parts[0] if parts else "",
-                "full_text_parts_count": len(parts),
-                "full_text_parts": parts,
                 "moved_to": d.moved_to,
-                "file_name": d.file_name,
-                "file_path": d.file_path,
+                "full_text": text,
             }
         )
 
@@ -4082,9 +4243,7 @@ def run_pipeline(
         logging.info("Wrote summaries workbook: %s", peers_path)
         logging.info("Wrote import workbook: %s", import_path)
         if full_text_path is not None:
-            logging.info("Wrote full-text workbook: %s", full_text_path)
-        else:
-            logging.info("Full-text workbook disabled by default (see full_text_legacy_structure.txt)")
+            logging.info("Wrote full-text archive: %s", full_text_path)
     except Exception as exc:
         logging.exception("Failed to write Excel outputs: %s", exc)
         errors.append({"stage": "write_excel", "file_name": "", "file_path": str(output_dir), "error": str(exc)})
@@ -4609,11 +4768,12 @@ def run_pipeline_parallel(
     full_text_rows: List[Dict[str, Any]] = []
     for d in docs:
         text = raw_texts.get(d.doc_id, "")
-        parts = split_for_excel(text)
         full_text_rows.append(
             {
                 "doc_id": d.doc_id,
                 "file_key": d.file_key,
+                "file_name": d.file_name,
+                "file_path": d.file_path,
                 "category": d.category,
                 "short_summary": d.short_summary,
                 "long_summary": d.long_summary,
@@ -4621,12 +4781,9 @@ def run_pipeline_parallel(
                 "word_count": d.word_count,
                 "char_count": d.char_count,
                 "extraction_status": d.extraction_status,
-                "full_text": parts[0] if parts else "",
-                "full_text_parts_count": len(parts),
-                "full_text_parts": parts,
+                "review_flags": d.review_flags,
                 "moved_to": d.moved_to,
-                "file_name": d.file_name,
-                "file_path": d.file_path,
+                "full_text": text,
             }
         )
 
@@ -4646,9 +4803,7 @@ def run_pipeline_parallel(
         logging.info("Wrote summaries workbook: %s", peers_path)
         logging.info("Wrote import workbook: %s", import_path)
         if full_text_path is not None:
-            logging.info("Wrote full-text workbook: %s", full_text_path)
-        else:
-            logging.info("Full-text workbook disabled by default (see full_text_legacy_structure.txt)")
+            logging.info("Wrote full-text archive: %s", full_text_path)
     except Exception as exc:
         logging.exception("Failed to write Excel outputs: %s", exc)
         with errors_lock:
@@ -4714,24 +4869,26 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--workers", type=int, default=1, help="Number of workers for parallel CLI processing (default: 1)")
     parser.add_argument("--articles", action="store_true", help="Enable PDF article splitting/summarization and write Articles sheet")
     parser.add_argument("--no-articles", action="store_true", help="Deprecated alias; article generation is disabled by default")
+    parser.add_argument("--interactive", action="store_true", help="Prompt for missing CLI values in the terminal instead of opening the GUI")
     parser.add_argument("--category-path-map", help="Path to category_path_map.json for import Path mapping")
     parser.add_argument(
         "--include-full-text-output",
         action="store_true",
-        help="Write <app>__docatlas_full_text.xlsx (disabled by default)",
+        help="Deprecated compatibility flag; full-text JSONL.GZ archive is now written by default",
     )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    argv_tokens = sys.argv[1:]
     if args.workers < 1:
         raise ValueError("--workers must be >= 1")
     config_path = Path(args.config) if args.config else Path(__file__).with_name("applications.json")
     category_path_map_path = Path(args.category_path_map) if args.category_path_map else Path(__file__).with_name(DEFAULT_CATEGORY_PATH_MAP_FILENAME)
     category_path_map = load_category_path_map(category_path_map_path)
     app_config = load_app_config(config_path)
-    is_gui_flow = not (args.input and args.output and (args.categories or args.app))
+    is_gui_flow = (not args.interactive) and not (args.input and args.output and (args.categories or args.app))
 
     if args.edit_config:
         if tk is None:
@@ -4780,6 +4937,11 @@ def main() -> int:
             return 1
 
     validate_app_and_category_map(app_config, category_path_map)
+    if args.include_full_text_output:
+        logging.warning(
+            "--include-full-text-output is deprecated; DocAtlas now writes "
+            "<app>__docatlas_full_text.jsonl.gz by default."
+        )
 
     append_excel = not args.overwrite_excel
     if args.charter_mode or args.signal_scan:
@@ -4799,6 +4961,21 @@ def main() -> int:
         ocrmypdf_enabled = not args.no_ocrmypdf
         embeddings_source = resolve_embeddings_source(args.embeddings_source)
         articles_enabled = bool(args.articles)
+        if args.no_articles:
+            logging.warning("--no-articles is deprecated and now the default behavior; use --articles to enable article generation.")
+    elif args.interactive:
+        (
+            input_dir,
+            output_dir,
+            categories,
+            app_name,
+            ocrmypdf_enabled,
+            embeddings_source,
+            append_excel,
+            args.no_move,
+            articles_enabled,
+            args.workers,
+        ) = resolve_cli_interactive_inputs(args, argv_tokens, app_config)
         if args.no_articles:
             logging.warning("--no-articles is deprecated and now the default behavior; use --articles to enable article generation.")
     else:

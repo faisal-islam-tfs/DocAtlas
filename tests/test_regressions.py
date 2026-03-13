@@ -1,9 +1,13 @@
+import gzip
 import io
+import json
 import logging
 import tempfile
 import unittest
 import zipfile
+from argparse import Namespace
 from pathlib import Path
+from unittest.mock import patch
 
 import pandas as pd
 from openpyxl import Workbook, load_workbook
@@ -26,6 +30,11 @@ def make_workbook_bytes(text: str) -> bytes:
 def write_xlsx(path: Path, text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(make_workbook_bytes(text))
+
+
+def read_jsonl_gz(path: Path) -> list[dict]:
+    with gzip.open(path, "rt", encoding="utf-8") as fh:
+        return [json.loads(line) for line in fh if line.strip()]
 
 
 def dummy_cfg() -> docatlas.AzureConfig:
@@ -189,6 +198,99 @@ class DocAtlasRegressionTests(unittest.TestCase):
         docs_df = pd.read_excel(peers_path, sheet_name="Documents")
         self.assertEqual(len(docs_df), 1)
         self.assertEqual(docs_df.loc[0, "FilePath"], "C:/root/input/sub/a.xlsx")
+        archive_path = out_dir / "TestApp__docatlas_full_text.jsonl.gz"
+        self.assertTrue(archive_path.exists())
+        self.assertFalse((out_dir / "TestApp__docatlas_full_text.xlsx").exists())
+
+    def test_write_excels_writes_full_text_archive_by_default_and_dedupes_append(self) -> None:
+        out_dir = self.make_tempdir()
+        self.prepare_logging(out_dir)
+        first_doc = sample_doc("20260305111752-DOC-00001", "key-1", "sub/a.xlsx")
+        second_doc = sample_doc("20260305111752-DOC-00002", "key-2", "sub/b.xlsx")
+
+        docatlas.write_excels(
+            out_dir=out_dir,
+            docs=[first_doc],
+            articles=[],
+            full_text_rows=[
+                {
+                    "doc_id": first_doc.doc_id,
+                    "file_key": first_doc.file_key,
+                    "file_name": first_doc.file_name,
+                    "file_path": first_doc.file_path,
+                    "category": first_doc.category,
+                    "short_summary": first_doc.short_summary,
+                    "long_summary": first_doc.long_summary,
+                    "tags": ", ".join(first_doc.tags),
+                    "word_count": first_doc.word_count,
+                    "char_count": first_doc.char_count,
+                    "extraction_status": first_doc.extraction_status,
+                    "review_flags": first_doc.review_flags,
+                    "moved_to": first_doc.moved_to,
+                    "full_text": "first body text",
+                }
+            ],
+            app_name="TestApp",
+            append_excel=False,
+            category_path_map=self.category_path_map(),
+            include_full_text_output=False,
+            articles_enabled=False,
+        )
+
+        archive_path = out_dir / "TestApp__docatlas_full_text.jsonl.gz"
+        records = read_jsonl_gz(archive_path)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["file_key"], "key-1")
+        self.assertEqual(records[0]["full_text"], "first body text")
+
+        docatlas.write_excels(
+            out_dir=out_dir,
+            docs=[first_doc, second_doc],
+            articles=[],
+            full_text_rows=[
+                {
+                    "doc_id": first_doc.doc_id,
+                    "file_key": first_doc.file_key,
+                    "file_name": first_doc.file_name,
+                    "file_path": first_doc.file_path,
+                    "category": first_doc.category,
+                    "short_summary": first_doc.short_summary,
+                    "long_summary": first_doc.long_summary,
+                    "tags": ", ".join(first_doc.tags),
+                    "word_count": first_doc.word_count,
+                    "char_count": first_doc.char_count,
+                    "extraction_status": first_doc.extraction_status,
+                    "review_flags": first_doc.review_flags,
+                    "moved_to": first_doc.moved_to,
+                    "full_text": "first body text again",
+                },
+                {
+                    "doc_id": second_doc.doc_id,
+                    "file_key": second_doc.file_key,
+                    "file_name": second_doc.file_name,
+                    "file_path": second_doc.file_path,
+                    "category": second_doc.category,
+                    "short_summary": second_doc.short_summary,
+                    "long_summary": second_doc.long_summary,
+                    "tags": ", ".join(second_doc.tags),
+                    "word_count": second_doc.word_count,
+                    "char_count": second_doc.char_count,
+                    "extraction_status": second_doc.extraction_status,
+                    "review_flags": second_doc.review_flags,
+                    "moved_to": second_doc.moved_to,
+                    "full_text": "second body text",
+                },
+            ],
+            app_name="TestApp",
+            append_excel=True,
+            category_path_map=self.category_path_map(),
+            include_full_text_output=False,
+            articles_enabled=False,
+        )
+
+        records = read_jsonl_gz(archive_path)
+        self.assertEqual([record["file_key"] for record in records], ["key-1", "key-2"])
+        self.assertEqual(records[1]["full_text"], "second body text")
 
     def test_write_excels_omits_articles_sheet_when_disabled(self) -> None:
         out_dir = self.make_tempdir()
@@ -208,6 +310,8 @@ class DocAtlasRegressionTests(unittest.TestCase):
 
         wb = load_workbook(out_dir / "TestApp__docatlas_summaries.xlsx")
         self.assertEqual(wb.sheetnames, ["Documents", "Duplicates"])
+        self.assertTrue((out_dir / "TestApp__docatlas_full_text.jsonl.gz").exists())
+        self.assertFalse((out_dir / "TestApp__docatlas_full_text.xlsx").exists())
 
     def test_write_excels_preserves_existing_articles_sheet_on_append(self) -> None:
         out_dir = self.make_tempdir()
@@ -281,6 +385,8 @@ class DocAtlasRegressionTests(unittest.TestCase):
         peers_path = output_dir / "TestApp__docatlas_summaries.xlsx"
         wb = load_workbook(peers_path)
         self.assertEqual(wb.sheetnames, ["Documents", "Duplicates"])
+        self.assertTrue((output_dir / "TestApp__docatlas_full_text.jsonl.gz").exists())
+        self.assertFalse((output_dir / "TestApp__docatlas_full_text.xlsx").exists())
         docs_df = pd.read_excel(peers_path, sheet_name="Documents")
         self.assertEqual(
             sorted(docs_df["FilePath"].astype(str).tolist()),
@@ -327,6 +433,8 @@ class DocAtlasRegressionTests(unittest.TestCase):
         peers_path = output_dir / "TestApp__docatlas_summaries.xlsx"
         wb = load_workbook(peers_path)
         self.assertEqual(wb.sheetnames, ["Documents", "Duplicates"])
+        self.assertTrue((output_dir / "TestApp__docatlas_full_text.jsonl.gz").exists())
+        self.assertFalse((output_dir / "TestApp__docatlas_full_text.xlsx").exists())
         docs_df = pd.read_excel(peers_path, sheet_name="Documents")
         self.assertEqual(
             sorted(docs_df["FilePath"].astype(str).tolist()),
@@ -370,6 +478,65 @@ class DocAtlasRegressionTests(unittest.TestCase):
         self.assertIn("Detailed List:", unsupported_text)
         self.assertIn(".url | link.url | link.url", unsupported_text)
         self.assertIn(".zip | broken.zip | broken.zip", unsupported_text)
+
+    def test_resolve_cli_interactive_inputs_prompts_for_missing_values(self) -> None:
+        root = self.make_tempdir()
+        input_dir = root / "input"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = root / "output"
+
+        args = Namespace(
+            input=str(input_dir),
+            output=None,
+            categories=None,
+            app="TestApp",
+            charter_mode=False,
+            signal_scan=False,
+            no_move=False,
+            no_ocrmypdf=False,
+            embeddings_source=None,
+            overwrite_excel=False,
+            articles=False,
+            workers=1,
+        )
+
+        with patch("sys.stdin.isatty", return_value=True):
+            with patch(
+                "builtins.input",
+                side_effect=[
+                    str(output_dir),
+                    "",
+                    "",
+                    "",
+                    "",
+                    "y",
+                    "2",
+                ],
+            ):
+                result = docatlas.resolve_cli_interactive_inputs(args, [], {"TestApp": ["Other"]})
+
+        (
+            resolved_input,
+            resolved_output,
+            categories,
+            app_name,
+            ocrmypdf_enabled,
+            embeddings_source,
+            append_excel,
+            no_move,
+            articles_enabled,
+            workers,
+        ) = result
+        self.assertEqual(resolved_input, input_dir)
+        self.assertEqual(resolved_output, output_dir)
+        self.assertEqual(categories, ["Other"])
+        self.assertEqual(app_name, "TestApp")
+        self.assertTrue(ocrmypdf_enabled)
+        self.assertEqual(embeddings_source, "full_text")
+        self.assertTrue(append_excel)
+        self.assertTrue(no_move)
+        self.assertTrue(articles_enabled)
+        self.assertEqual(workers, 2)
 
 
 if __name__ == "__main__":

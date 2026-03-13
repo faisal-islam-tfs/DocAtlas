@@ -29,11 +29,16 @@ DocAtlas writes:
    - Created inside each <category>_Duplicate folder
    - Columns: Group ID, Relation, FileName, Exact_sc, Near_sc, Assigned to, Action
 
-Full-text workbook behavior
----------------------------
-- <app>__docatlas_full_text.xlsx is disabled by default.
-- Re-enable with: --include-full-text-output
-- Legacy structure is documented in full_text_legacy_structure.txt.
+9) full_text_legacy_structure.txt
+   - Historical note describing the retired Excel full-text workbook layout
+
+Full-text archive behavior
+--------------------------
+- <app>__docatlas_full_text.jsonl.gz is written by default on every run.
+- One gzip-compressed JSON object is written per document.
+- Append mode dedupes by document identity (`file_key`) before adding new records.
+- Overwrite mode rebuilds the archive from scratch.
+- Legacy Excel structure remains documented historically in `full_text_legacy_structure.txt`.
 
 Import sheet mapping behavior
 -----------------------------
