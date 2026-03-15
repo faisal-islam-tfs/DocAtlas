@@ -55,7 +55,16 @@ def dummy_cfg() -> docatlas.AzureConfig:
     )
 
 
-def sample_doc(doc_id: str, file_key: str, file_path: str, file_name: str | None = None) -> docatlas.DocRecord:
+def sample_doc(
+    doc_id: str,
+    file_key: str,
+    file_path: str,
+    file_name: str | None = None,
+    *,
+    category: str = "Other",
+    extraction_status: str = "ok",
+    review_flags: str = "",
+) -> docatlas.DocRecord:
     return docatlas.DocRecord(
         doc_id=doc_id,
         file_key=file_key,
@@ -63,14 +72,14 @@ def sample_doc(doc_id: str, file_key: str, file_path: str, file_name: str | None
         file_path=file_path,
         source_path=file_path,
         file_ext=Path(file_path).suffix.lower() or ".xlsx",
-        category="Other",
+        category=category,
         tags=["tag1", "tag2"],
         short_summary="Test summary",
         long_summary="Longer test summary for workbook output.",
         word_count=25,
         char_count=180,
-        extraction_status="ok",
-        review_flags="",
+        extraction_status=extraction_status,
+        review_flags=review_flags,
         duplicate_of="",
         duplicate_score=None,
         duplicate_group_id="",
@@ -114,6 +123,153 @@ class DocAtlasRegressionTests(unittest.TestCase):
     def prepare_logging(self, out_dir: Path) -> None:
         docatlas.setup_logging(out_dir)
         self.addCleanup(logging.shutdown)
+
+    def test_process_file_supports_xls_via_conversion(self) -> None:
+        root = self.make_tempdir()
+        xls_path = root / "legacy.xls"
+        xls_path.write_bytes(b"fake xls placeholder")
+        converted_path = root / "converted.xlsx"
+        write_xlsx(converted_path, " ".join(["legacy xls content"] * 20))
+
+        with patch("docatlas.convert_xls_to_xlsx", return_value=converted_path):
+            text, articles, status = docatlas.process_file(
+                xls_path,
+                ocrmypdf_enabled=False,
+                articles_enabled=False,
+                source_label="legacy.xls",
+            )
+
+        self.assertIn("legacy xls content", text)
+        self.assertEqual(articles, [])
+        self.assertEqual(status, "ok")
+
+    def test_detect_duplicates_does_not_use_embedding_similarity_for_exact(self) -> None:
+        duplicate_of, duplicate_score, duplicate_group = docatlas.detect_duplicates(
+            [
+                ("DOC-1", "hash-a", docatlas.np.array([1.0, 0.0], dtype=docatlas.np.float32)),
+                ("DOC-2", "hash-b", docatlas.np.array([0.999, 0.001], dtype=docatlas.np.float32)),
+            ],
+            docatlas.DUPLICATE_THRESHOLD,
+        )
+        self.assertEqual(duplicate_of, {})
+        self.assertEqual(duplicate_score, {})
+        self.assertEqual(duplicate_group, {})
+
+    def test_run_pipeline_failed_spreadsheets_do_not_collapse_into_exact_duplicates(self) -> None:
+        root = self.make_tempdir()
+        input_dir = root / "input"
+        output_dir = root / "output"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        (input_dir / "broken_a.xlsx").write_bytes(b"not an xlsx a")
+        (input_dir / "broken_b.xlsx").write_bytes(b"not an xlsx b")
+
+        docatlas.run_pipeline(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            categories=["Other"],
+            cfg=dummy_cfg(),
+            dry_run=True,
+            use_resume=False,
+            ocrmypdf_enabled=False,
+            app_name="TestApp",
+            embeddings_source=docatlas.EMBEDDINGS_SOURCE_NONE,
+            append_excel=False,
+            category_path_map=self.category_path_map(),
+            include_full_text_output=False,
+            no_move=True,
+            articles_enabled=False,
+        )
+        self.addCleanup(logging.shutdown)
+
+        docs_df = pd.read_excel(output_dir / "TestApp__docatlas_summaries.xlsx", sheet_name="Documents")
+        self.assertEqual(len(docs_df), 2)
+        self.assertTrue((docs_df["ExtractionStatus"] == "no_text").all())
+        self.assertTrue((docs_df["DuplicateOf"].fillna("") == "").all())
+        self.assertTrue((docs_df["DupScore"].fillna(0.0) == 0.0).all())
+
+    def test_weak_near_duplicate_edges_require_structural_signal(self) -> None:
+        docs = [
+            sample_doc("DOC-1", "k1", "nanodrop/enablement_final.pptx", category="CatA"),
+            sample_doc("DOC-2", "k2", "xenon/introduction_overview.pptx", category="CatA"),
+            sample_doc("DOC-3", "k3", "crispr/product_alpha_overview.pdf", category="CatB"),
+            sample_doc("DOC-4", "k4", "crispr/product_alpha_update.docx", category="CatB"),
+        ]
+        score = 0.80
+        vec_a = docatlas.np.array([1.0, 0.0], dtype=docatlas.np.float32)
+        vec_b = docatlas.np.array([score, (1 - score**2) ** 0.5], dtype=docatlas.np.float32)
+        doc_embeddings = {
+            "DOC-1": vec_a,
+            "DOC-2": vec_b,
+            "DOC-3": vec_a,
+            "DOC-4": vec_b,
+        }
+
+        near_of, _near_score, _near_group, _near_adj, near_edges = docatlas.detect_near_duplicates_docs(docs, doc_embeddings)
+
+        self.assertNotIn(("DOC-1", "DOC-2"), near_edges)
+        self.assertIn(("DOC-3", "DOC-4"), near_edges)
+        self.assertEqual(near_of.get("DOC-1", ""), "")
+        self.assertIn(near_of.get("DOC-3", ""), {"DOC-4"})
+
+    def test_article_type_prefers_manuals_over_troubleshooting_content(self) -> None:
+        label = docatlas.classify_article_type_by_content(
+            "superscript_user_guide.pdf",
+            "SuperScript User Guide",
+            "Guide for setup and operation.",
+            "Includes a troubleshooting section and error examples.",
+            "This user guide explains setup, operation, troubleshooting, and maintenance.",
+        )
+        self.assertEqual(label, "Manuals and Guides")
+
+        label = docatlas.classify_article_type_by_content(
+            "qpcr_error_resolution.pdf",
+            "qPCR Error Resolution",
+            "How to resolve common issues.",
+            "Focuses on failure causes and corrective actions.",
+            "Troubleshooting errors, failures, and issue resolution steps.",
+        )
+        self.assertEqual(label, "Troubleshooting")
+
+    def test_write_excels_excludes_unreadable_docs_from_import(self) -> None:
+        out_dir = self.make_tempdir()
+        self.prepare_logging(out_dir)
+        good_doc = sample_doc("20260305111752-DOC-00001", "key-1", "sub/a.xlsx", category="Other")
+        unreadable_doc = sample_doc(
+            "20260305111752-DOC-00002",
+            "key-2",
+            "sub/b.xlsx",
+            category=docatlas.UNREADABLE_CATEGORY,
+            extraction_status="no_text",
+            review_flags="low_text,short_text",
+        )
+
+        docatlas.write_excels(
+            out_dir=out_dir,
+            docs=[good_doc, unreadable_doc],
+            articles=[],
+            full_text_rows=[
+                {"doc_id": good_doc.doc_id, "full_text": "good body text"},
+                {"doc_id": unreadable_doc.doc_id, "full_text": "bad body text"},
+            ],
+            app_name="TestApp",
+            append_excel=False,
+            category_path_map=self.category_path_map(),
+            include_full_text_output=False,
+            articles_enabled=False,
+        )
+
+        import_df = pd.read_excel(out_dir / "TestApp__docatlas_import.xlsx", sheet_name="import")
+        self.assertEqual(len(import_df), 1)
+        self.assertEqual(str(import_df.loc[0, "Title"]), good_doc.short_summary)
+
+    def test_large_doc_summary_guard_uses_local_fallback(self) -> None:
+        huge_text = ("important assay content " * 20000).strip()
+        with patch("docatlas.summarize_document", side_effect=AssertionError("chat path should not run")):
+            summary, flag = docatlas.summarize_document_safe(dummy_cfg(), huge_text, ["Other"], "huge.xlsx")
+
+        self.assertEqual(flag, "summary_truncated_large_doc")
+        self.assertTrue(summary["long_summary"])
+        self.assertEqual(summary["category"], "Other")
 
     def test_list_files_discovers_zip_members_with_logical_paths(self) -> None:
         input_dir = self.make_tempdir()

@@ -46,6 +46,7 @@ Import sheet mapping behavior
 - Fallback path: <App>/<Category>
 - ArticleType is content-based rule classification.
 - AutoPublish is always true.
+- `Unreadable` documents are excluded from the import workbook by default.
 - `FilePath` values in review workbooks are relative to the selected input root.
 - For files coming from archives, source references in workbooks use a logical relative path like `archive.zip!/inner/file.pdf` rather than the temporary staging path.
 
@@ -53,6 +54,7 @@ Unsupported file inventory
 --------------------------
 - `unsupported_files_report.txt` is always written per run.
 - It records unsupported files found in normal folders and inside `.zip` archives.
+- It also lists the top unsupported source folders for quick intake cleanup.
 - Each line includes:
   - datatype / extension
   - file name
@@ -62,6 +64,7 @@ Unsupported file inventory
   - total unsupported files
   - counts by datatype
   - counts from normal folders vs zip members vs invalid zips
+  - top unsupported source folders
 
 Articles sheet behavior
 -----------------------

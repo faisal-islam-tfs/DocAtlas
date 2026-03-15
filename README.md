@@ -1,7 +1,7 @@
 ﻿# DocAtlas
 â€” DocAtlas â€”
 
-DocAtlas is a CLI + GUI tool to extract content from PDFs/DOC/DOCX/PPT/PPTX/XLSX, summarize, categorize, tag, detect duplicates, and organize files into category folders.
+DocAtlas is a CLI + GUI tool to extract content from PDFs/DOC/DOCX/PPT/PPTX/XLS/XLSX, summarize, categorize, tag, detect duplicates, and organize files into category folders.
 
 ## Quick Start (Windows)
 1. Install Python (3.10+).
@@ -57,6 +57,7 @@ Notes:
   - counts by category, duplicates, extraction status
 - `unsupported_files_report.txt`
   - unsupported datatype counts and detailed skipped-file inventory with relative/logical paths
+  - includes top noisy source folders to guide preprocessing before reruns
 - In each `<category>_Duplicate` folder:
   - `duplicate_groups_overview.xlsx` (group-review tracker with `Group ID`, `Relation`, `FileName`, `Exact_sc`, `Near_sc`, `Assigned to`, `Action`)
 
@@ -266,8 +267,10 @@ python docatlas.py --input "C:\path\to\docs" --output "C:\path\to\out" --app "Se
 ```
 
 ## Notes
-- Duplicates are detected by SHA-256 hash and embeddings (cosine similarity >= 0.97).
+- Exact duplicates are detected from document byte hashes.
+- Near-duplicates are detected from embeddings within the same category, with a stricter weak-edge guard based on file/path structure.
 - Low/no-text files are routed to the `Unreadable` category.
+- `Unreadable` documents are excluded from the import workbook by default.
 - Excel outputs are appended by default; use `--overwrite-excel` to rebuild from scratch.
 - If `--limit` is used, DocAtlas logs a rough total-time estimate.
 - Token usage estimates are added to the summary report.
@@ -286,6 +289,7 @@ python docatlas.py --input "C:\path\to\docs" --output "C:\path\to\out" --app "Se
 - If OCR is enabled, embedded images inside `.docx` and `.pptx` are also OCR-processed.
 - Embeddings are skipped for very short texts to reduce cost (configurable in code).
 - `.doc` files are supported by auto-conversion to `.docx` via LibreOffice (`soffice`) if installed.
+- `.xls` files are supported by auto-conversion to `.xlsx` via LibreOffice (`soffice`) if installed.
 - `.zip` archives in the input tree are auto-unpacked into a temporary staging folder; supported files inside them are processed normally.
 - Workbook/report `FilePath` values are stored relative to the selected input root, not as machine-specific absolute paths.
 - Files discovered inside archives keep a logical relative path like `archive.zip!/inner/file.pdf` in reports and Excel outputs.
@@ -293,8 +297,9 @@ python docatlas.py --input "C:\path\to\docs" --output "C:\path\to\out" --app "Se
 - Full extracted document text is archived by default in `<app>__docatlas_full_text.jsonl.gz`.
 - Tags are deduplicated and capped to a reasonable size.
 - `summary_report.txt` includes file type breakdown, category percentages, OCR usage count, duplicate group stats, and document length stats.
-- `summary_report.txt` also includes compact unsupported-file counts by datatype and source kind.
+- `summary_report.txt` also includes compact unsupported-file counts by datatype, source kind, and the top unsupported source folders.
 - Errors are captured per file and reported in `summary_report.txt` without stopping the run.
+- Very large documents use a deterministic local summary fallback instead of attempting oversized chat prompts; these docs get `summary_truncated_large_doc` in `ReviewFlag`.
 - `extraction_status` column values:
   - `ok`: text extracted normally
   - `ocrmypdf_used`: OCRmyPDF used successfully

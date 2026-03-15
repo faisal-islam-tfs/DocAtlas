@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
 DocAtlas document processing pipeline:
-- Extract text from PDF/DOCX/PPTX/XLSX
+- Extract text from PDF/DOCX/PPTX/XLS/XLSX
 - Auto-unpack zip archives into a staging area and process supported contents
 - Summarize, categorize, tag with Azure OpenAI
-- Detect duplicates via hashes + embeddings
+- Detect exact duplicates via hashes and near-duplicates via embeddings
 - Output review Excel files plus a compressed full-text archive
 - Move files into category folders (duplicates to <category>_Duplicate)
 """
@@ -17,6 +17,7 @@ import io
 import hashlib
 import json
 import logging
+import math
 import os
 import random
 import re
@@ -94,7 +95,7 @@ except Exception:  # pragma: no cover
     tqdm = None
 
 
-SUPPORTED_EXTS = {".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xlsx"}
+SUPPORTED_EXTS = {".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx"}
 INVALID_WIN_CHARS = r'<>:"/\\|?*'
 ILLEGAL_EXCEL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
 
@@ -116,7 +117,7 @@ DEFAULT_API_TIMEOUT_SEC = 150
 MAX_CHARS_PER_CHUNK = 12000
 MAX_ARTICLE_CHARS = 20000
 DUPLICATE_THRESHOLD = 0.97
-NEAR_DUP_MUTUAL = 0.72
+NEAR_DUP_MUTUAL = 0.78
 NEAR_DUP_STRONG = 0.84
 MIN_EXTRACTED_CHARS = 200
 MIN_ARTICLE_BODY_CHARS = 400
@@ -137,6 +138,9 @@ FALLBACK_MIN_SENTENCE_CHARS = 35
 FALLBACK_MAX_TOTAL_CHARS_DOC_LONG = 2400
 FALLBACK_MAX_TOTAL_CHARS_DOC_SHORT = 420
 FALLBACK_MAX_TOTAL_CHARS_ARTICLE = 3200
+MAX_DOC_SUMMARY_INPUT_CHARS = 180000
+MAX_DOC_SUMMARY_CHUNKS = 12
+MAX_DOC_SUMMARY_FALLBACK_SOURCE_CHARS = 140000
 RESUME_FILENAME = "resume.json"
 LAST_RUN_STATS_FILENAME = "last_run_stats.json"
 DEFAULT_EMBEDDINGS_SOURCE = "full_text"
@@ -304,6 +308,59 @@ CATEGORY_HINT_PHRASES: Dict[str, List[Tuple[str, float]]] = {
         ("low signal", 2.0),
         ("no amplification", 2.2),
     ],
+    "arctus": [
+        ("arcturus", 5.0),
+        ("laser capture microdissection", 4.0),
+        ("lcm", 2.2),
+        ("pico pure", 3.0),
+        ("histogene", 3.0),
+    ],
+    "magmax and kingfisher": [
+        ("magmax", 4.0),
+        ("kingfisher", 4.0),
+        ("bind wash elute", 1.8),
+        ("magnetic particle processor", 2.0),
+    ],
+    "qubit and quant-it": [
+        ("qubit", 4.5),
+        ("quant-it", 3.8),
+        ("quant it", 3.8),
+        ("fluorometer", 2.0),
+    ],
+    "superscript reverse transcriptases": [
+        ("superscript", 4.5),
+        ("reverse transcriptase", 2.8),
+    ],
+    "microrna reverse transcription kits": [
+        ("mirna reverse transcription", 4.2),
+        ("microrna reverse transcription", 4.2),
+        ("stem-loop", 1.8),
+    ],
+    "high-capacity reverse transcription kits": [
+        ("high capacity reverse transcription", 5.0),
+        ("high-capacity reverse transcription", 5.0),
+        ("reverse transcription kit", 2.5),
+    ],
+    "thermal cycler plastics and reagents": [
+        ("microamp", 4.0),
+        ("optical adhesive film", 3.2),
+        ("reaction plate", 2.2),
+        ("strip tube", 2.0),
+        ("optical plate", 2.0),
+    ],
+    "water": [
+        ("water purification", 5.0),
+        ("water purification system", 5.0),
+        ("water analysis", 4.5),
+        ("water quality", 3.5),
+        ("ultrapure water", 4.5),
+        ("ultra pure water", 4.5),
+        ("nuclease free water", 4.0),
+        ("rnase free water", 4.0),
+        ("dnase free water", 4.0),
+        ("deionized water", 3.5),
+        ("distilled water", 3.5),
+    ],
 }
 
 CATEGORY_GENERIC_TOKENS = {
@@ -323,6 +380,84 @@ CATEGORY_GENERIC_TOKENS = {
     "expression",
     "snp",
     "genotyping",
+}
+
+CATEGORY_REQUIRED_PHRASES: Dict[str, Tuple[str, ...]] = {
+    "water": (
+        "water purification",
+        "water purification system",
+        "water analysis",
+        "water quality",
+        "ultrapure water",
+        "ultra pure water",
+        "nuclease free water",
+        "rnase free water",
+        "dnase free water",
+        "deionized water",
+        "distilled water",
+    ),
+}
+
+CATEGORY_REQUIRED_TOKEN_HITS: Dict[str, int] = {
+    "water": 2,
+}
+
+ARTICLE_TYPE_PRIMARY_RULES: List[Tuple[str, Tuple[str, ...]]] = [
+    ("FAQs", ("faq", "frequently asked questions")),
+    (
+        "Manuals and Guides",
+        ("user guide", "manual", "protocol", "instructions for use", "instruction manual", "quick reference", "release notes"),
+    ),
+    (
+        "Application and Product Notes",
+        ("application note", "app note", "product note", "white paper", "brochure", "poster", "flyer"),
+    ),
+    (
+        "Education & Training",
+        ("training", "tutorial", "course", "workshop", "webinar", "slides", "slide deck", "deck"),
+    ),
+    (
+        "References",
+        ("certificate", "coa", "coc", "declaration", "specification", "datasheet", "compliance", "statement", "memo"),
+    ),
+    (
+        "Troubleshooting",
+        ("troubleshooting", "troubleshoot", "error", "failure", "issue", "problem", "fix", "resolve"),
+    ),
+]
+
+ARTICLE_TYPE_SECONDARY_RULES: List[Tuple[str, Tuple[str, ...]]] = [
+    ("FAQs", ("faq", "frequently asked questions")),
+    ("Application and Product Notes", ("application note", "app note", "product note", "white paper")),
+    ("Manuals and Guides", ("user guide", "manual", "protocol", "instructions for use", "quick reference")),
+    ("Education & Training", ("training", "tutorial", "course", "workshop", "webinar", "slides", "deck")),
+    ("References", ("certificate", "coa", "coc", "declaration", "specification", "datasheet", "compliance")),
+]
+
+ARTICLE_TYPE_TROUBLESHOOTING_SECONDARY_TERMS = (
+    "troubleshooting",
+    "troubleshoot",
+    "error",
+    "failure",
+    "issue",
+    "problem",
+    "fix",
+    "resolve",
+)
+
+NEAR_DUP_FILE_TOKEN_STOPWORDS = {
+    "final",
+    "draft",
+    "copy",
+    "version",
+    "updated",
+    "update",
+    "notes",
+    "document",
+    "presentation",
+    "sample",
+    "guide",
+    "manual",
 }
 
 USAGE_LOCK = threading.Lock()
@@ -916,10 +1051,25 @@ def scan_input_stats(files: List[InputFile]) -> Dict[str, Any]:
 def unsupported_file_stats(items: List[UnsupportedFileRecord]) -> Dict[str, Any]:
     by_type: Dict[str, int] = {}
     by_source_kind: Dict[str, int] = {}
+    by_source_folder: Dict[str, int] = {}
     for item in items:
         by_type[item.file_type] = by_type.get(item.file_type, 0) + 1
         by_source_kind[item.source_kind] = by_source_kind.get(item.source_kind, 0) + 1
-    return {"count": len(items), "by_type": by_type, "by_source_kind": by_source_kind}
+        normalized = str(item.file_path or "").replace("\\", "/").rstrip("/")
+        if "!/" in normalized:
+            archive, member = normalized.split("!/", 1)
+            member_parent = Path(member).parent.as_posix()
+            folder = f"{archive}!/{member_parent}" if member_parent not in ("", ".") else f"{archive}!/[root]"
+        else:
+            folder = str(Path(normalized).parent).replace("\\", "/")
+        folder = folder if folder not in ("", ".") else "[root]"
+        by_source_folder[folder] = by_source_folder.get(folder, 0) + 1
+    return {
+        "count": len(items),
+        "by_type": by_type,
+        "by_source_kind": by_source_kind,
+        "by_source_folder": by_source_folder,
+    }
 
 
 def write_unsupported_files_report(out_dir: Path, items: List[UnsupportedFileRecord]) -> Path:
@@ -937,6 +1087,10 @@ def write_unsupported_files_report(out_dir: Path, items: List[UnsupportedFileRec
     lines.extend(["", "Unsupported by Source Kind:"])
     for source_kind in sorted(stats["by_source_kind"].keys()):
         lines.append(f"- {source_kind}: {stats['by_source_kind'][source_kind]}")
+    if stats["by_source_folder"]:
+        lines.extend(["", "Top Source Folders:"])
+        for folder, count in sorted(stats["by_source_folder"].items(), key=lambda kv: (-kv[1], kv[0]))[:10]:
+            lines.append(f"- {folder}: {count}")
     lines.extend(["", "Detailed List:"])
     for item in items:
         lines.append(f"- {item.file_type} | {item.file_name} | {item.file_path}")
@@ -1033,6 +1187,32 @@ def normalize_text(text: str) -> str:
 
 def hash_text(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8", errors="ignore")).hexdigest()
+
+
+def hash_file_bytes(path: Path, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        while True:
+            chunk = fh.read(chunk_size)
+            if not chunk:
+                break
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def exact_hash_for_file(path: Path, fallback_key: str) -> str:
+    try:
+        return hash_file_bytes(path)
+    except Exception as exc:
+        logging.warning("Falling back to file-key exact hash for %s: %s", path, exc)
+        return f"filekey:{hash_text(fallback_key)}"
+
+
+def exact_hash_for_text(text: str, fallback_key: str) -> str:
+    normalized = normalize_text(text)
+    if normalized:
+        return hash_text(normalized)
+    return f"empty:{hash_text(fallback_key)}"
 
 
 def embedding_text_for_doc(embeddings_source: str, normalized_text: str, long_summary: str, short_summary: str) -> str:
@@ -1228,6 +1408,14 @@ def _infer_category_from_text(text: str, categories: List[str]) -> str:
             if hit_count > 0:
                 score += min(3.0, float(hit_count)) * weight
 
+        required_phrases = CATEGORY_REQUIRED_PHRASES.get(cat_norm, ())
+        if required_phrases:
+            required_hits = max(token_freq.get(tok, 0) for tok in cat_tokens) if cat_tokens else 0
+            min_token_hits = CATEGORY_REQUIRED_TOKEN_HITS.get(cat_norm, 1)
+            has_required_phrase = any(phrase in text_norm for phrase in required_phrases)
+            if not has_required_phrase and required_hits < min_token_hits:
+                score = min(score, 0.25)
+
         scored.append((score, i, cat))
 
     if not scored:
@@ -1270,14 +1458,41 @@ def build_fallback_article_summary(text: str) -> str:
     )
 
 
+def _summary_fallback_source_text(text: str) -> str:
+    if len(text) <= MAX_DOC_SUMMARY_FALLBACK_SOURCE_CHARS:
+        return text
+    head = int(MAX_DOC_SUMMARY_FALLBACK_SOURCE_CHARS * 0.75)
+    tail = MAX_DOC_SUMMARY_FALLBACK_SOURCE_CHARS - head
+    return f"{text[:head]}\n\n[... truncated for local summary fallback ...]\n\n{text[-tail:]}"
+
+
+def summary_guard_reason(text: str) -> str:
+    if not text:
+        return ""
+    if len(text) > MAX_DOC_SUMMARY_INPUT_CHARS:
+        return "summary_truncated_large_doc"
+    chunk_count = max(1, math.ceil(len(text) / MAX_CHARS_PER_CHUNK))
+    if chunk_count > MAX_DOC_SUMMARY_CHUNKS:
+        return "summary_truncated_large_doc"
+    return ""
+
+
 def summarize_document_safe(
     cfg: AzureConfig,
     text: str,
     categories: List[str],
     file_label: str,
-) -> Tuple[Dict[str, Any], bool]:
+) -> Tuple[Dict[str, Any], str]:
+    guard_reason = summary_guard_reason(text)
+    if guard_reason:
+        logging.warning(
+            "Large-document summary guard triggered for %s (chars=%d); using local extractive fallback",
+            file_label,
+            len(text),
+        )
+        return build_fallback_document_summary(_summary_fallback_source_text(text), categories), guard_reason
     try:
-        return summarize_document(cfg, text, categories), False
+        return summarize_document(cfg, text, categories), ""
     except Exception as exc:
         if not is_content_filter_error(exc):
             raise
@@ -1285,7 +1500,7 @@ def summarize_document_safe(
             "Content filter during document summary for %s; using local extractive fallback",
             file_label,
         )
-        return build_fallback_document_summary(text, categories), True
+        return build_fallback_document_summary(_summary_fallback_source_text(text), categories), "summary_fallback_content_filter"
 
 
 def summarize_article_safe(cfg: AzureConfig, text: str, file_label: str) -> Tuple[str, bool]:
@@ -1511,19 +1726,29 @@ def text_to_html(text: str) -> str:
     return "\n".join(html_parts) if html_parts else "<p></p>"
 
 
-def classify_article_type_by_content(short_summary: str, long_summary: str, content_text: str) -> str:
-    text = normalize_text(" ".join([short_summary or "", long_summary or "", content_text or ""]))
-    rules = [
-        (("faq", "frequently asked"), "FAQs"),
-        (("troubleshoot", "error", "issue", "fix"), "Troubleshooting"),
-        (("manual", "guide", "instruction", "procedure"), "Manuals and Guides"),
-        (("reference", "specification", "datasheet"), "References"),
-        (("training", "tutorial", "course", "learn"), "Education & Training"),
-        (("application note", "product note"), "Application and Product Notes"),
-    ]
-    for needles, label in rules:
-        if any(n in text for n in needles):
+def classify_article_type_by_content(
+    file_name: str,
+    title: str,
+    short_summary: str,
+    long_summary: str,
+    content_text: str,
+) -> str:
+    file_stem = Path(file_name or "").stem
+    primary_text = normalize_text(" ".join([file_stem, title or "", short_summary or ""]))
+    secondary_text = normalize_text(" ".join([long_summary or "", (content_text or "")[:12000]]))
+
+    for label, needles in ARTICLE_TYPE_PRIMARY_RULES:
+        if any(needle in primary_text for needle in needles):
             return label
+
+    for label, needles in ARTICLE_TYPE_SECONDARY_RULES:
+        if any(needle in secondary_text for needle in needles):
+            return label
+
+    troubleshooting_hits = sum(1 for needle in ARTICLE_TYPE_TROUBLESHOOTING_SECONDARY_TERMS if needle in secondary_text)
+    if troubleshooting_hits >= 2:
+        return "Troubleshooting"
+
     return "Documentation"
 
 
@@ -1677,8 +1902,7 @@ def extract_text_docx(path: Path, ocr_images: bool = False) -> str:
     return "\n".join(parts)
 
 
-def convert_doc_to_docx(path: Path) -> Optional[Path]:
-    """Convert legacy .doc to .docx using LibreOffice (soffice)."""
+def convert_office_with_soffice(path: Path, target_ext: str) -> Optional[Path]:
     soffice = shutil.which("soffice") or shutil.which("soffice.exe")
     if not soffice:
         logging.warning("LibreOffice (soffice) not found; cannot convert %s", path)
@@ -1686,20 +1910,27 @@ def convert_doc_to_docx(path: Path) -> Optional[Path]:
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
             out_dir = Path(tmpdir)
+            profile_dir = out_dir / "lo_profile"
+            profile_dir.mkdir(parents=True, exist_ok=True)
             cmd = [
                 soffice,
                 "--headless",
+                "--nologo",
+                "--nodefault",
+                "--nolockcheck",
+                "--norestore",
+                f"-env:UserInstallation={profile_dir.resolve().as_uri()}",
                 "--convert-to",
-                "docx",
+                target_ext,
                 "--outdir",
                 str(out_dir),
                 str(path),
             ]
             subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            candidates = list(out_dir.glob("*.docx"))
+            candidates = list(out_dir.glob(f"*.{target_ext}"))
             if not candidates:
                 return None
-            fd, temp_path = tempfile.mkstemp(suffix=".docx")
+            fd, temp_path = tempfile.mkstemp(suffix=f".{target_ext}")
             os.close(fd)
             target = Path(temp_path)
             shutil.copy2(candidates[0], target)
@@ -1707,38 +1938,21 @@ def convert_doc_to_docx(path: Path) -> Optional[Path]:
     except Exception as exc:
         logging.exception("Failed to convert %s: %s", path, exc)
         return None
+
+
+def convert_doc_to_docx(path: Path) -> Optional[Path]:
+    """Convert legacy .doc to .docx using LibreOffice (soffice)."""
+    return convert_office_with_soffice(path, "docx")
 
 
 def convert_ppt_to_pptx(path: Path) -> Optional[Path]:
     """Convert legacy .ppt to .pptx using LibreOffice (soffice)."""
-    soffice = shutil.which("soffice") or shutil.which("soffice.exe")
-    if not soffice:
-        logging.warning("LibreOffice (soffice) not found; cannot convert %s", path)
-        return None
-    try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            out_dir = Path(tmpdir)
-            cmd = [
-                soffice,
-                "--headless",
-                "--convert-to",
-                "pptx",
-                "--outdir",
-                str(out_dir),
-                str(path),
-            ]
-            subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            candidates = list(out_dir.glob("*.pptx"))
-            if not candidates:
-                return None
-            fd, temp_path = tempfile.mkstemp(suffix=".pptx")
-            os.close(fd)
-            target = Path(temp_path)
-            shutil.copy2(candidates[0], target)
-            return target
-    except Exception as exc:
-        logging.exception("Failed to convert %s: %s", path, exc)
-        return None
+    return convert_office_with_soffice(path, "pptx")
+
+
+def convert_xls_to_xlsx(path: Path) -> Optional[Path]:
+    """Convert legacy .xls to .xlsx using LibreOffice (soffice)."""
+    return convert_office_with_soffice(path, "xlsx")
 
 
 def extract_text_pptx(path: Path, ocr_images: bool = False) -> str:
@@ -2211,7 +2425,7 @@ def detect_duplicates(
     items: List[Tuple[str, str, Optional[np.ndarray]]], threshold: float
 ) -> Tuple[Dict[str, str], Dict[str, float], Dict[str, str]]:
     """
-    items: list of (item_id, hash, embedding)
+    items: list of (item_id, exact_hash, embedding)
     returns: duplicate_of, duplicate_score, duplicate_group_id
     """
     duplicate_of: Dict[str, str] = {}
@@ -2219,10 +2433,9 @@ def detect_duplicates(
     duplicate_group_id: Dict[str, str] = {}
 
     hash_to_primary: Dict[str, str] = {}
-    primary_embeddings: Dict[str, np.ndarray] = {}
     group_counter = 1
 
-    for item_id, hsh, emb in items:
+    for item_id, hsh, _emb in items:
         if hsh in hash_to_primary:
             primary = hash_to_primary[hsh]
             duplicate_of[item_id] = primary
@@ -2235,34 +2448,57 @@ def detect_duplicates(
             duplicate_group_id[item_id] = group
             continue
 
-        # Near-duplicate check
-        best_primary = None
-        best_score = 0.0
-        if emb is not None and primary_embeddings:
-            for pid, pvec in primary_embeddings.items():
-                score = cosine_similarity(emb, pvec)
-                if score > best_score:
-                    best_score = score
-                    best_primary = pid
-        if best_primary is not None and best_score >= threshold:
-            duplicate_of[item_id] = best_primary
-            duplicate_score[item_id] = best_score
-            group = duplicate_group_id.get(best_primary)
-            if not group:
-                group = f"DUP-{group_counter:04d}"
-                group_counter += 1
-                duplicate_group_id[best_primary] = group
-            duplicate_group_id[item_id] = group
-        else:
-            hash_to_primary[hsh] = item_id
-            if emb is not None:
-                primary_embeddings[item_id] = emb
+        hash_to_primary[hsh] = item_id
 
     return duplicate_of, duplicate_score, duplicate_group_id
 
 
 def _sorted_pair(a: str, b: str) -> Tuple[str, str]:
     return (a, b) if a <= b else (b, a)
+
+
+def _near_dup_name_tokens(file_name: str) -> set[str]:
+    stem = Path(file_name or "").stem
+    return {
+        tok
+        for tok in re.findall(r"[a-z0-9][a-z0-9\-]{2,}", normalize_text(stem))
+        if tok not in SUMMARY_STOPWORDS and tok not in NEAR_DUP_FILE_TOKEN_STOPWORDS and (len(tok) >= 4 or any(ch.isdigit() for ch in tok))
+    }
+
+
+def _near_dup_parent_tokens(file_path: str) -> set[str]:
+    normalized = str(file_path or "").replace("\\", "/")
+    if "!/" in normalized:
+        normalized = normalized.split("!/", 1)[1]
+    parts = [p for p in normalized.split("/") if p]
+    if len(parts) <= 1:
+        return set()
+    parent_text = " ".join(parts[:-1])
+    return {
+        tok
+        for tok in re.findall(r"[a-z0-9][a-z0-9\-]{2,}", normalize_text(parent_text))
+        if tok not in SUMMARY_STOPWORDS and len(tok) >= 4
+    }
+
+
+def _near_dup_path_family(file_path: str) -> str:
+    normalized = str(file_path or "").replace("\\", "/")
+    if "!/" in normalized:
+        normalized = normalized.split("!/", 1)[1]
+    parts = [p.casefold() for p in normalized.split("/") if p]
+    if len(parts) <= 1:
+        return ""
+    return "/".join(parts[: min(2, len(parts) - 1)])
+
+
+def has_weak_near_duplicate_signal(doc_a: DocRecord, doc_b: DocRecord) -> bool:
+    if _near_dup_path_family(doc_a.file_path) and _near_dup_path_family(doc_a.file_path) == _near_dup_path_family(doc_b.file_path):
+        return True
+    if _near_dup_name_tokens(doc_a.file_name).intersection(_near_dup_name_tokens(doc_b.file_name)):
+        return True
+    if _near_dup_parent_tokens(doc_a.file_path).intersection(_near_dup_parent_tokens(doc_b.file_path)):
+        return True
+    return False
 
 
 def detect_near_duplicates_docs(
@@ -2283,6 +2519,8 @@ def detect_near_duplicates_docs(
     docs_by_id = {d.doc_id: d for d in docs}
     by_category: Dict[str, List[str]] = {}
     for d in docs:
+        if d.category == UNREADABLE_CATEGORY:
+            continue
         emb = doc_embeddings.get(d.doc_id)
         if emb is None:
             continue
@@ -2338,6 +2576,8 @@ def detect_near_duplicates_docs(
             if top_j is None:
                 continue
             if top_j[0] != id_i or top_j[1] < min_mutual:
+                continue
+            if not has_weak_near_duplicate_signal(docs_by_id[id_i], docs_by_id[id_j]):
                 continue
             pair = _sorted_pair(id_i, id_j)
             near_edges.add(pair)
@@ -3166,6 +3406,19 @@ def process_file(
         text = extract_text_xlsx(path)
         status = "ok" if len(text.strip()) >= MIN_EXTRACTED_CHARS else "no_text"
         return text, [], status
+    if ext == ".xls":
+        xlsx_path = convert_xls_to_xlsx(path)
+        if xlsx_path is None:
+            return "", [], "no_text_xls_convert_failed"
+        try:
+            text = extract_text_xlsx(xlsx_path)
+        finally:
+            try:
+                xlsx_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+        status = "ok" if len(text.strip()) >= MIN_EXTRACTED_CHARS else "no_text"
+        return text, [], status
     if ext == ".pdf":
         text, pages, status = extract_text_pdf(path, ocrmypdf_enabled)
         articles = split_pdf_into_articles(pages, source_label=source_label or str(path)) if articles_enabled else []
@@ -3395,9 +3648,11 @@ def write_excels(
     text_by_doc_id = {str(r.get("doc_id", "")): str(r.get("full_text", "") or "") for r in full_text_rows}
     import_rows: List[Dict[str, Any]] = []
     for d in docs:
+        if d.category == UNREADABLE_CATEGORY:
+            continue
         content_text = text_by_doc_id.get(d.doc_id, "")
         title = d.short_summary or d.file_name
-        article_type = classify_article_type_by_content(d.short_summary, d.long_summary, content_text)
+        article_type = classify_article_type_by_content(d.file_name, title, d.short_summary, d.long_summary, content_text)
         base_path = resolve_category_path(category_path_map, app_name, d.category)
         import_rows.append(
             {
@@ -3544,6 +3799,10 @@ def write_summary_report(
         lines.append(f"- invalid_zip_count: {unsupported_stats['by_source_kind'].get('invalid_zip', 0)}")
     for file_type in sorted(unsupported_stats["by_type"].keys()):
         lines.append(f"- {file_type}: {unsupported_stats['by_type'][file_type]}")
+    if unsupported_stats["by_source_folder"]:
+        lines.append("- top_source_folders:")
+        for folder, count in sorted(unsupported_stats["by_source_folder"].items(), key=lambda kv: (-kv[1], kv[0]))[:10]:
+            lines.append(f"  - {folder}: {count}")
     lines.append("")
     lines.append("Document Length (approx):")
     lines.append(f"- avg_words: {avg_words}")
@@ -3833,7 +4092,7 @@ def run_pipeline(
     article_texts: Dict[str, str] = {}
     extraction_statuses: Dict[str, str] = {}
     errors: List[Dict[str, str]] = []
-    doc_summary_fallback_ids: set[str] = set()
+    doc_summary_flags: Dict[str, set[str]] = {}
 
     iterable = tqdm(files, desc="Extracting") if tqdm else files
     for idx, input_file in enumerate(iterable, start=1):
@@ -3880,7 +4139,7 @@ def run_pipeline(
         raw_texts[doc_id] = text
         extraction_statuses[doc_id] = resume_files.get(key, {}).get("extraction_status", extraction_status)
         normalized = normalize_text(text)
-        hsh = hash_text(normalized)
+        hsh = exact_hash_for_file(path, key)
         doc_hashes[doc_id] = hsh
 
         emb_vec: Optional[np.ndarray] = None
@@ -3905,7 +4164,7 @@ def run_pipeline(
             for a_idx, (_title, body) in enumerate(pdf_articles, start=1):
                 article_id = f"{doc_id}-A{a_idx:03d}"
                 article_texts[article_id] = body
-                ahash = hash_text(normalize_text(body))
+                ahash = exact_hash_for_text(body, f"{key}|article|{a_idx}")
                 article_hashes[article_id] = ahash
                 article_id_to_key[article_id] = key
                 article_id_to_idx[article_id] = a_idx
@@ -3960,9 +4219,9 @@ def run_pipeline(
             summary = {}
         else:
             try:
-                summary, used_fallback = summarize_document_safe(cfg, text, categories, path.name)
-                if used_fallback:
-                    doc_summary_fallback_ids.add(doc_id)
+                summary, summary_flag = summarize_document_safe(cfg, text, categories, path.name)
+                if summary_flag:
+                    doc_summary_flags.setdefault(doc_id, set()).add(summary_flag)
                 resume_files[key]["doc_summary"] = summary
             except Exception as exc:
                 logging.exception("Summarization failed for %s: %s", display_path, exc)
@@ -4003,8 +4262,11 @@ def run_pipeline(
             review_flags.append("low_text")
         if len(text) < MIN_EXTRACTED_CHARS:
             review_flags.append("short_text")
-        if doc_id in doc_summary_fallback_ids:
+        summary_flags = doc_summary_flags.get(doc_id, set())
+        if "summary_fallback_content_filter" in summary_flags:
             review_flags.append("summary_fallback_content_filter")
+        if "summary_truncated_large_doc" in summary_flags:
+            review_flags.append("summary_truncated_large_doc")
 
         docs.append(
             DocRecord(
@@ -4350,6 +4612,7 @@ def run_pipeline_parallel(
     article_id_to_key: Dict[str, str] = {}
     article_id_to_idx: Dict[str, int] = {}
     errors: List[Dict[str, str]] = []
+    doc_summary_flags: Dict[str, set[str]] = {}
     errors_lock = threading.Lock()
     state_lock = threading.Lock()
 
@@ -4396,7 +4659,7 @@ def run_pipeline_parallel(
                 }
 
         normalized = normalize_text(text)
-        hsh = hash_text(normalized)
+        hsh = exact_hash_for_file(path, key)
 
         emb_vec: Optional[np.ndarray] = None
         if embeddings_source == "full_text":
@@ -4468,7 +4731,7 @@ def run_pipeline_parallel(
                     key = input_file.file_key
                     article_id_to_key[article_id] = key
                     article_id_to_idx[article_id] = a_idx
-                    ahash = hash_text(normalize_text(body))
+                    ahash = exact_hash_for_text(body, f"{key}|article|{a_idx}")
                     article_hashes[article_id] = ahash
                     article_items.append((article_id, ahash, aemb_vec))
 
@@ -4485,7 +4748,7 @@ def run_pipeline_parallel(
     docs: List[DocRecord] = []
     articles: List[ArticleRecord] = []
 
-    def summarize_doc(idx_path: Tuple[int, InputFile]) -> Tuple[int, InputFile, Dict[str, Any], bool]:
+    def summarize_doc(idx_path: Tuple[int, InputFile]) -> Tuple[int, InputFile, Dict[str, Any], str]:
         idx, input_file = idx_path
         path = input_file.source_path
         display_path = input_file.display_path
@@ -4503,7 +4766,7 @@ def run_pipeline_parallel(
             summary = {}
         else:
             try:
-                summary, used_fallback = summarize_document_safe(cfg, text, categories, path.name)
+                summary, summary_flag = summarize_document_safe(cfg, text, categories, path.name)
                 with state_lock:
                     resume_files[key]["doc_summary"] = summary
             except Exception as exc:
@@ -4511,22 +4774,21 @@ def run_pipeline_parallel(
                 with errors_lock:
                     errors.append({"stage": "summarize", "file_name": path.name, "file_path": display_path, "error": str(exc)})
                 summary = {}
-                used_fallback = False
+                summary_flag = ""
         if dry_run or not text.strip() or low_text or cached.get("doc_summary"):
-            used_fallback = False
+            summary_flag = ""
         if use_resume:
             with state_lock:
                 resume["files"] = resume_files
                 save_resume(output_dir, resume)
-        return idx, input_file, summary, used_fallback
+        return idx, input_file, summary, summary_flag
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [ex.submit(summarize_doc, (i, p)) for i, p in enumerate(files, start=1)]
         summaries: Dict[str, Dict[str, Any]] = {}
-        summary_fallback_flags: Dict[str, bool] = {}
         for fut in as_completed(futures):
             try:
-                idx, input_file, summary, used_fallback = fut.result()
+                idx, input_file, summary, summary_flag = fut.result()
             except Exception as exc:
                 logging.exception("Summarize worker failed: %s", exc)
                 with errors_lock:
@@ -4535,7 +4797,8 @@ def run_pipeline_parallel(
             with state_lock:
                 doc_id = resume_files.get(input_file.file_key, {}).get("doc_id", f"{run_id}-DOC-{idx:05d}")
             summaries[doc_id] = summary
-            summary_fallback_flags[doc_id] = used_fallback
+            if summary_flag:
+                doc_summary_flags.setdefault(doc_id, set()).add(summary_flag)
 
     for idx, input_file in enumerate(files, start=1):
         path = input_file.source_path
@@ -4579,8 +4842,11 @@ def run_pipeline_parallel(
             review_flags.append("low_text")
         if len(text) < MIN_EXTRACTED_CHARS:
             review_flags.append("short_text")
-        if summary_fallback_flags.get(doc_id, False):
+        summary_flags = doc_summary_flags.get(doc_id, set())
+        if "summary_fallback_content_filter" in summary_flags:
             review_flags.append("summary_fallback_content_filter")
+        if "summary_truncated_large_doc" in summary_flags:
+            review_flags.append("summary_truncated_large_doc")
 
         docs.append(
             DocRecord(

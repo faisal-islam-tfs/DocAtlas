@@ -2,7 +2,7 @@
 ==========================
 
 1) Discover & validate
-- Scan input folder for supported files (.pdf, .doc, .docx, .ppt, .pptx, .xlsx)
+- Scan input folder for supported files (.pdf, .doc, .docx, .ppt, .pptx, .xls, .xlsx)
 - Auto-unpack any .zip archives into a temporary staging area and include supported files found inside them
 - Store workbook-facing source paths relative to the selected input root
 - Skip unsupported types for extraction, but record them for intake reporting
@@ -12,6 +12,7 @@
 - .docx -> python-docx
 - .doc -> convert to .docx via LibreOffice (soffice), then python-docx
 - .pptx -> python-pptx
+- .xls -> convert to .xlsx via LibreOffice (soffice), then openpyxl
 - .xlsx -> openpyxl
 - .pdf -> pdfplumber
   - If text is too short, OCR runs:
@@ -39,12 +40,14 @@
   - LLM is used here (summaries, category, tags, article summaries)
 - If chat returns `content_filter`, DocAtlas falls back to local extractive summarization
   and continues; document ReviewFlag includes `summary_fallback_content_filter`.
+- Very large documents are summarized locally instead of sending oversized prompts;
+  document ReviewFlag includes `summary_truncated_large_doc`.
 
 5) Duplicate detection
-- Exact duplicates: SHA-256 hash
+- Exact duplicates: document byte hash
 - Near-duplicates (paraphrase candidates): embeddings + cosine similarity
   - Evaluated within the same category only
-  - Balanced rules: strong-score edge or mutual-top1 edge
+  - Balanced rules: strong-score edge or mutual-top1 edge with file/path structural guard
   - Full text by default (can be changed to summary or disabled)
   - Embeddings API is used here (only if embeddings are enabled)
 - Exact + near edges are merged into unified review groups (`ReviewGroupID`)
@@ -57,9 +60,10 @@
     - written only when article generation is enabled
     - in append mode, existing `Articles` sheet is preserved unchanged when article generation is disabled
 - *_docatlas_import.xlsx (standalone import sheet: Id, Path, Title, Content, Summary, Tags, Attachments, AutoPublish, ArticleType)
+- Import excludes documents categorized as `Unreadable`
 - *_docatlas_full_text.jsonl.gz (written by default; one gzip-compressed JSON object per document)
 - summary_report.txt (counts, extraction status, token estimates, no-text list, file type breakdown, unsupported file counts, category %s, OCR usage, duplicate group stats, doc length stats, per-file errors)
-- unsupported_files_report.txt (datatype counts plus detailed unsupported file list with relative/logical paths)
+- unsupported_files_report.txt (datatype counts, top source folders, plus detailed unsupported file list with relative/logical paths)
 - duplicate_groups_overview.xlsx in each <category>_Duplicate folder (manual cluster assignment/review)
 - Optional: resume.json + last_run_stats.json
 

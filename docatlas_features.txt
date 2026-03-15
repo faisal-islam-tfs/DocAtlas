@@ -2,11 +2,12 @@
 =====================
 
 Input & Extraction
-- Supports .pdf, .doc, .docx, .ppt, .pptx, .xlsx
+- Supports .pdf, .doc, .docx, .ppt, .pptx, .xls, .xlsx
 - Auto-unpacks .zip archives into a temporary staging area and processes supported files inside them
 - Stores workbook-facing source paths relative to the selected input root
 - Records unsupported files from normal folders and zip contents for intake reporting
 - .doc auto-converted to .docx via LibreOffice (if installed)
+- .xls auto-converted to .xlsx via LibreOffice (if installed)
 - PDF extraction via pdfplumber
 - OCR for PDFs: OCRmyPDF (non-forced pass, then forced pass only if needed) -> Tesseract fallback
 - OCR of embedded images in .docx and .pptx when OCR is enabled
@@ -21,6 +22,7 @@ Summarization & Classification (LLM)
 - Optional article summaries for PDFs (disabled by default)
 - If chat returns `content_filter`, a local extractive fallback summary is generated
 - Documents using that fallback are flagged with `summary_fallback_content_filter`
+- Very large documents use a deterministic local summary fallback and are flagged with `summary_truncated_large_doc`
 - Final document category is selected deterministically from extracted text using tuned keyword/phrase rules
 
 PDF Article Handling
@@ -30,8 +32,8 @@ PDF Article Handling
 - Stores article summaries separately when enabled
 
 Duplicate Detection
-- Exact duplicates: SHA-256 hash
-- Near-duplicates: embeddings + cosine similarity (same-category, balanced rules)
+- Exact duplicates: document byte hash (or normalized text hash for article rows)
+- Near-duplicates: embeddings + cosine similarity (same-category, balanced rules + weak-edge structural guard)
 - Embeddings source: full text (default), summary, or none
 
 Outputs
@@ -40,6 +42,7 @@ Outputs
   - Duplicates (unified exact+near review groups)
   - Articles (conditional: written only when article generation is enabled; append mode preserves existing sheet)
 - *_docatlas_import.xlsx (standalone import sheet for downstream KB import)
+- Unreadable documents are excluded from import output by default
 - *_docatlas_full_text.jsonl.gz (written by default; one JSON object per document, gzip-compressed)
 - summary_report.txt
 - unsupported_files_report.txt
@@ -81,7 +84,7 @@ Reporting & Cost
 - No-text file list
 - Extraction status counts
 - File type breakdown and category percentages
-- Unsupported file counts by datatype and source kind, plus a dedicated unsupported file inventory report
+- Unsupported file counts by datatype/source kind, plus top noisy source folders and a dedicated unsupported file inventory report
 - OCR usage count and duplicate group stats
 - Document length stats (avg/longest/shortest)
 - Errors captured per file and reported without stopping the run
