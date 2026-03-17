@@ -315,6 +315,18 @@ CATEGORY_HINT_PHRASES: Dict[str, List[Tuple[str, float]]] = {
         ("pico pure", 3.0),
         ("histogene", 3.0),
     ],
+    "custom dna oligos": [
+        ("custom dna oligo", 4.2),
+        ("custom oligo", 3.8),
+        ("primer", 1.4),
+        ("oligo", 1.8),
+        ("sirna", 2.0),
+        ("plate map", 2.4),
+        ("well position", 2.0),
+        ("extinction coefficient", 2.0),
+        ("desalted", 1.8),
+        ("tm", 1.2),
+    ],
     "magmax and kingfisher": [
         ("magmax", 4.0),
         ("kingfisher", 4.0),
@@ -347,6 +359,47 @@ CATEGORY_HINT_PHRASES: Dict[str, List[Tuple[str, float]]] = {
         ("reaction plate", 2.2),
         ("strip tube", 2.0),
         ("optical plate", 2.0),
+        ("pcr plate", 2.6),
+        ("384 well", 1.8),
+        ("96 well", 1.6),
+        ("skirted plate", 2.0),
+        ("optical adhesive", 3.0),
+    ],
+    "electrophoresis reagents and kits": [
+        ("e gel", 4.0),
+        ("e base", 4.0),
+        ("safe imager", 4.0),
+        ("ibase", 3.5),
+        ("gel cassette", 2.4),
+        ("dna ladder", 2.0),
+        ("agarose gel", 1.8),
+    ],
+    "mol bio sample prep": [
+        ("sample prep", 3.8),
+        ("benchpro", 4.4),
+        ("prepstation", 4.0),
+        ("tempus", 3.4),
+        ("vacuum manifold", 2.2),
+        ("nucleic acid prepstation", 4.0),
+        ("dna purification", 2.0),
+        ("rna isolation", 2.0),
+    ],
+    "nanodrop": [
+        ("nanodrop", 5.0),
+        ("nanodrop one", 4.4),
+        ("nanodrop eight", 4.4),
+        ("microvolume", 2.4),
+        ("spectrophotometer", 1.8),
+        ("scivault", 1.6),
+    ],
+    "protein expression": [
+        ("protein expression", 4.6),
+        ("bluegrass", 4.0),
+        ("algae", 2.2),
+        ("baculo", 2.8),
+        ("baculodirect", 4.0),
+        ("chlamydomonas", 2.4),
+        ("synechococcus", 2.4),
     ],
     "water": [
         ("water purification", 5.0),
@@ -360,6 +413,27 @@ CATEGORY_HINT_PHRASES: Dict[str, List[Tuple[str, float]]] = {
         ("dnase free water", 4.0),
         ("deionized water", 3.5),
         ("distilled water", 3.5),
+        ("molecular biology grade water", 4.5),
+        ("pcr grade water", 4.0),
+        ("water nuclease free", 4.0),
+    ],
+    "dynabeads": [
+        ("beadretriever", 4.0),
+        ("immunomagnetic separation", 2.8),
+        ("chromagar", 2.2),
+        ("o157", 1.8),
+        ("giardia", 2.2),
+        ("cryptosporidium", 2.2),
+        ("legionella", 2.0),
+    ],
+    "transfection": [
+        ("lipofectamine", 4.0),
+        ("invivofectamine", 4.2),
+        ("neon", 3.4),
+        ("xenon", 3.4),
+        ("electroporation", 2.4),
+        ("microporation", 2.4),
+        ("transfection reagent", 2.2),
     ],
 }
 
@@ -395,11 +469,85 @@ CATEGORY_REQUIRED_PHRASES: Dict[str, Tuple[str, ...]] = {
         "dnase free water",
         "deionized water",
         "distilled water",
+        "molecular biology grade water",
+        "pcr grade water",
+        "water nuclease free",
     ),
 }
 
 CATEGORY_REQUIRED_TOKEN_HITS: Dict[str, int] = {
     "water": 2,
+}
+
+CATEGORY_PATH_COMPONENT_HINTS: Dict[str, List[Tuple[str, float]]] = {
+    "arctus": [
+        ("arcturus", 5.0),
+        ("lcm", 2.5),
+    ],
+    "custom dna oligos": [
+        ("custom dna oligos", 4.5),
+        ("oligo files", 4.0),
+        ("randall primers", 3.2),
+        ("primers", 2.2),
+    ],
+    "dynabeads": [
+        ("dynabeads", 4.8),
+        ("beadretriever", 4.0),
+    ],
+    "electrophoresis reagents and kits": [
+        ("electrophoresis", 4.2),
+        ("e gel", 4.0),
+        ("e base", 4.0),
+        ("safe imager", 3.8),
+        ("ibases", 3.0),
+        ("ibase", 3.8),
+    ],
+    "magmax and kingfisher": [
+        ("magmax & kingfisher", 4.6),
+        ("magmax and kingfisher", 4.6),
+        ("magmax", 4.0),
+        ("kingfisher", 4.0),
+    ],
+    "mol bio sample prep": [
+        ("sample prep", 4.2),
+        ("benchpro", 4.4),
+        ("prepstation", 4.2),
+        ("6100", 3.4),
+        ("6700", 3.0),
+        ("tempus", 3.2),
+    ],
+    "nanodrop": [
+        ("nanodrop", 5.0),
+        ("nanodrop eight", 4.0),
+        ("nanodrop one onec", 4.0),
+        ("nanodrop onec", 3.8),
+    ],
+    "protein expression": [
+        ("protein expression", 4.8),
+        ("algae", 2.6),
+        ("bluegrass", 4.0),
+    ],
+    "qubit and quant-it": [
+        ("qubit and quant it", 4.6),
+        ("qubit and quant-it", 4.6),
+        ("qubit", 4.0),
+    ],
+    "thermal cycler plastics and reagents": [
+        ("pcr plastics", 4.8),
+        ("microamp", 4.0),
+        ("optical adhesive", 3.4),
+    ],
+    "transfection": [
+        ("transfection", 4.4),
+        ("neon", 4.0),
+        ("xenon", 4.0),
+        ("invivofectamine reagents", 3.8),
+        ("lipid transfection reagents", 3.4),
+    ],
+}
+
+CATEGORY_REQUIRED_PATH_COMPONENTS: Dict[str, Tuple[str, ...]] = {
+    "water": ("water",),
 }
 
 ARTICLE_TYPE_PRIMARY_RULES: List[Tuple[str, Tuple[str, ...]]] = [
@@ -1363,7 +1511,26 @@ def _extract_top_tags(text: str, max_tags: int = MAX_TAGS) -> List[str]:
     return [t for t, _n in ranked[:max_tags]]
 
 
-def _infer_category_from_text(text: str, categories: List[str]) -> str:
+def _normalized_category_path_components(file_name: str = "", file_path: str = "") -> List[str]:
+    raw_parts: List[str] = []
+    if file_path:
+        raw_parts.extend(re.split(r"[\\/!]+", str(file_path)))
+    if file_name:
+        raw_parts.append(Path(str(file_name)).stem)
+    normalized: List[str] = []
+    for part in raw_parts:
+        part_norm = normalize_text(part)
+        if part_norm:
+            normalized.append(part_norm)
+    return normalized
+
+
+def _infer_category_from_text(
+    text: str,
+    categories: List[str],
+    file_name: str = "",
+    file_path: str = "",
+) -> str:
     """
     Deterministic category resolver:
     - Scores each candidate category from text only (no model output dependency)
@@ -1383,6 +1550,14 @@ def _infer_category_from_text(text: str, categories: List[str]) -> str:
     for tok in text_tokens:
         token_freq[tok] = token_freq.get(tok, 0) + 1
 
+    path_components = _normalized_category_path_components(file_name=file_name, file_path=file_path)
+    path_norm = " ".join(path_components)
+    path_tokens = _summary_tokens(path_norm)
+    path_token_freq: Dict[str, int] = {}
+    for tok in path_tokens:
+        path_token_freq[tok] = path_token_freq.get(tok, 0) + 1
+    path_component_set = set(path_components)
+
     scored: List[Tuple[float, int, str]] = []
     for i, cat in enumerate(candidates):
         cat_norm = normalize_text(cat)
@@ -1401,20 +1576,34 @@ def _infer_category_from_text(text: str, categories: List[str]) -> str:
         ]
         for tok in cat_tokens:
             score += min(1.0, float(token_freq.get(tok, 0)) * 0.2)
+            score += min(1.4, float(path_token_freq.get(tok, 0)) * 0.35)
 
         # Tuned phrase hints for known qPCR categories.
         for phrase, weight in CATEGORY_HINT_PHRASES.get(cat_norm, []):
             hit_count = text_norm.count(phrase)
             if hit_count > 0:
                 score += min(3.0, float(hit_count)) * weight
+            path_hit_count = path_norm.count(phrase)
+            if path_hit_count > 0:
+                score += min(2.0, float(path_hit_count)) * min(weight, 4.0) * 0.6
+
+        for component, weight in CATEGORY_PATH_COMPONENT_HINTS.get(cat_norm, []):
+            if component in path_component_set:
+                score += weight
 
         required_phrases = CATEGORY_REQUIRED_PHRASES.get(cat_norm, ())
         if required_phrases:
-            required_hits = max(token_freq.get(tok, 0) for tok in cat_tokens) if cat_tokens else 0
-            min_token_hits = CATEGORY_REQUIRED_TOKEN_HITS.get(cat_norm, 1)
-            has_required_phrase = any(phrase in text_norm for phrase in required_phrases)
-            if not has_required_phrase and required_hits < min_token_hits:
-                score = min(score, 0.25)
+            has_required_phrase = any(phrase in text_norm or phrase in path_norm for phrase in required_phrases)
+            required_components = CATEGORY_REQUIRED_PATH_COMPONENTS.get(cat_norm, ())
+            has_required_component = any(component in path_component_set for component in required_components)
+            if cat_norm == "water":
+                if not has_required_phrase and not has_required_component:
+                    score = 0.0
+            else:
+                required_hits = max(token_freq.get(tok, 0) for tok in cat_tokens) if cat_tokens else 0
+                min_token_hits = CATEGORY_REQUIRED_TOKEN_HITS.get(cat_norm, 1)
+                if not has_required_phrase and required_hits < min_token_hits:
+                    score = min(score, 0.25)
 
         scored.append((score, i, cat))
 
@@ -1429,7 +1618,12 @@ def _infer_category_from_text(text: str, categories: List[str]) -> str:
     return best_cat
 
 
-def build_fallback_document_summary(text: str, categories: List[str]) -> Dict[str, Any]:
+def build_fallback_document_summary(
+    text: str,
+    categories: List[str],
+    file_name: str = "",
+    file_path: str = "",
+) -> Dict[str, Any]:
     long_summary = _extractive_summary_text(
         text,
         max_sentences=FALLBACK_DOC_LONG_SENTENCES,
@@ -1445,7 +1639,7 @@ def build_fallback_document_summary(text: str, categories: List[str]) -> Dict[st
     return {
         "long_summary": long_summary,
         "short_summary": short_summary,
-        "category": _infer_category_from_text(text, categories),
+        "category": _infer_category_from_text(text, categories, file_name=file_name, file_path=file_path),
         "tags": _extract_top_tags(text, MAX_TAGS),
     }
 
@@ -1482,6 +1676,7 @@ def summarize_document_safe(
     text: str,
     categories: List[str],
     file_label: str,
+    file_path: str = "",
 ) -> Tuple[Dict[str, Any], str]:
     guard_reason = summary_guard_reason(text)
     if guard_reason:
@@ -1490,9 +1685,17 @@ def summarize_document_safe(
             file_label,
             len(text),
         )
-        return build_fallback_document_summary(_summary_fallback_source_text(text), categories), guard_reason
+        return (
+            build_fallback_document_summary(
+                _summary_fallback_source_text(text),
+                categories,
+                file_name=file_label,
+                file_path=file_path,
+            ),
+            guard_reason,
+        )
     try:
-        return summarize_document(cfg, text, categories), ""
+        return summarize_document(cfg, text, categories, file_name=file_label, file_path=file_path), ""
     except Exception as exc:
         if not is_content_filter_error(exc):
             raise
@@ -1500,7 +1703,15 @@ def summarize_document_safe(
             "Content filter during document summary for %s; using local extractive fallback",
             file_label,
         )
-        return build_fallback_document_summary(_summary_fallback_source_text(text), categories), "summary_fallback_content_filter"
+        return (
+            build_fallback_document_summary(
+                _summary_fallback_source_text(text),
+                categories,
+                file_name=file_label,
+                file_path=file_path,
+            ),
+            "summary_fallback_content_filter",
+        )
 
 
 def summarize_article_safe(cfg: AzureConfig, text: str, file_label: str) -> Tuple[str, bool]:
@@ -2337,13 +2548,24 @@ def extract_json(text: str) -> Dict[str, Any]:
     raise ValueError("Failed to parse JSON")
 
 
-def summarize_document(cfg: AzureConfig, text: str, categories: List[str]) -> Dict[str, Any]:
+def summarize_document(
+    cfg: AzureConfig,
+    text: str,
+    categories: List[str],
+    file_name: str = "",
+    file_path: str = "",
+) -> Dict[str, Any]:
     categories_list = categories + (["Other"] if "Other" not in categories else [])
     if UNREADABLE_CATEGORY not in categories_list:
         categories_list.append(UNREADABLE_CATEGORY)
     if len(text) <= MAX_CHARS_PER_CHUNK:
         summary = summarize_with_model(cfg, text, categories_list)
-        summary["category"] = _infer_category_from_text(text, categories_list)
+        summary["category"] = _infer_category_from_text(
+            text,
+            categories_list,
+            file_name=file_name,
+            file_path=file_path,
+        )
         return summary
 
     chunk_summaries: List[str] = []
@@ -2352,7 +2574,12 @@ def summarize_document(cfg: AzureConfig, text: str, categories: List[str]) -> Di
         chunk_summaries.append(chunk_summary)
     combined = "\n".join(chunk_summaries)
     summary = summarize_with_model(cfg, combined, categories_list)
-    summary["category"] = _infer_category_from_text(text, categories_list)
+    summary["category"] = _infer_category_from_text(
+        text,
+        categories_list,
+        file_name=file_name,
+        file_path=file_path,
+    )
     return summary
 
 
@@ -4219,7 +4446,13 @@ def run_pipeline(
             summary = {}
         else:
             try:
-                summary, summary_flag = summarize_document_safe(cfg, text, categories, path.name)
+                summary, summary_flag = summarize_document_safe(
+                    cfg,
+                    text,
+                    categories,
+                    path.name,
+                    display_path,
+                )
                 if summary_flag:
                     doc_summary_flags.setdefault(doc_id, set()).add(summary_flag)
                 resume_files[key]["doc_summary"] = summary
@@ -4766,7 +4999,13 @@ def run_pipeline_parallel(
             summary = {}
         else:
             try:
-                summary, summary_flag = summarize_document_safe(cfg, text, categories, path.name)
+                summary, summary_flag = summarize_document_safe(
+                    cfg,
+                    text,
+                    categories,
+                    path.name,
+                    display_path,
+                )
                 with state_lock:
                     resume_files[key]["doc_summary"] = summary
             except Exception as exc:

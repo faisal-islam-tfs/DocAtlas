@@ -117,6 +117,11 @@ class DocAtlasRegressionTests(unittest.TestCase):
         return {
             "TestApp": {
                 "Other": "/Life_Sciences/Life_Science_Applications/TestApp/Other",
+                "Nanodrop": "/Life_Sciences/Life_Science_Applications/TestApp/Nanodrop",
+                "Protein expression": "/Life_Sciences/Life_Science_Applications/TestApp/Protein_Expression",
+                "Water": "/Life_Sciences/Life_Science_Applications/TestApp/Water",
+                "Custom DNA Oligos": "/Life_Sciences/Life_Science_Applications/TestApp/Custom_DNA_Oligos",
+                "Dynabeads": "/Life_Sciences/Life_Science_Applications/TestApp/Dynabeads",
             }
         }
 
@@ -265,11 +270,71 @@ class DocAtlasRegressionTests(unittest.TestCase):
     def test_large_doc_summary_guard_uses_local_fallback(self) -> None:
         huge_text = ("important assay content " * 20000).strip()
         with patch("docatlas.summarize_document", side_effect=AssertionError("chat path should not run")):
-            summary, flag = docatlas.summarize_document_safe(dummy_cfg(), huge_text, ["Other"], "huge.xlsx")
+            summary, flag = docatlas.summarize_document_safe(
+                dummy_cfg(),
+                huge_text,
+                ["Other"],
+                "huge.xlsx",
+                "root/huge.xlsx",
+            )
 
         self.assertEqual(flag, "summary_truncated_large_doc")
         self.assertTrue(summary["long_summary"])
         self.assertEqual(summary["category"], "Other")
+
+    def test_infer_category_uses_path_hints_for_nanodrop(self) -> None:
+        category = docatlas._infer_category_from_text(
+            "Training overview for a microvolume UV-Vis spectrophotometer and dealer enablement.",
+            ["Nanodrop", "Other"],
+            file_name="NanoDrop8_ProductAwareness_21SEP2021.pptx",
+            file_path="Nanodrop/CONFIDENTIAL/NanoDrop Eight/NanoDrop8_ProductAwareness_21SEP2021.pptx",
+        )
+        self.assertEqual(category, "Nanodrop")
+
+    def test_infer_category_uses_path_hints_for_protein_expression(self) -> None:
+        category = docatlas._infer_category_from_text(
+            "Training quiz covering promoters, cloning methods, and algal engineering.",
+            ["Protein expression", "Other"],
+            file_name="Algal Engineering_Prod_Quiz.docx",
+            file_path="Protein expression/CONFIDENTIAL/Algae/Algal Engineering_Prod_Quiz.docx",
+        )
+        self.assertEqual(category, "Protein expression")
+
+    def test_infer_category_prefers_custom_dna_oligos_over_water_for_oligo_coa(self) -> None:
+        category = docatlas._infer_category_from_text(
+            (
+                "Certificate of analysis for custom DNA primers with sequences, "
+                "well positions, extinction coefficient, GC content, and reconstitution guidance."
+            ),
+            ["Custom DNA Oligos", "Water", "Other"],
+            file_name="18789122_e_plate.xls",
+            file_path="PCR/Primers/Oligo Files/Randall-Primers/CoAs/18789122_e_plate.xls",
+        )
+        self.assertEqual(category, "Custom DNA Oligos")
+
+    def test_infer_category_requires_explicit_water_signal(self) -> None:
+        category = docatlas._infer_category_from_text(
+            (
+                "MSDS for Dynabeads anti-E.coli suspension with sodium phosphate buffer, "
+                "safe handling guidance, and references to water samples."
+            ),
+            ["Dynabeads", "Water", "Other"],
+            file_name="71003_MTR-NAIV_EN.pdf",
+            file_path="Dynabeads/Dynabeads/CONFIDENTIAL/Bacterial Microbilogy/Documentation/MSDSs/71003_MTR-NAIV_EN.pdf",
+        )
+        self.assertEqual(category, "Dynabeads")
+
+    def test_molecular_biology_config_includes_nanodrop_and_protein_expression(self) -> None:
+        with open("applications.json", encoding="utf-8") as fh:
+            app_config = json.load(fh)["applications"]
+        with open("category_path_map.json", encoding="utf-8") as fh:
+            path_map = json.load(fh)
+
+        for app_name in ["Molecular Biology", "molbio"]:
+            self.assertIn("Nanodrop", app_config[app_name])
+            self.assertIn("Protein expression", app_config[app_name])
+            self.assertIn("Nanodrop", path_map[app_name])
+            self.assertIn("Protein expression", path_map[app_name])
 
     def test_list_files_discovers_zip_members_with_logical_paths(self) -> None:
         input_dir = self.make_tempdir()
