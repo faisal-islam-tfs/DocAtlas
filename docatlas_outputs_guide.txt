@@ -19,17 +19,21 @@ DocAtlas writes:
 
 4) unsupported_files_report.txt
 
-5) docatlas.log
+5) unsupported_cleanup.xlsx
+   - cleanup_queue
+   - cleanup_legend
 
-6) resume.json (if resume enabled)
+6) docatlas.log
 
-7) last_run_stats.json
+7) resume.json (if resume enabled)
 
-8) duplicate_groups_overview.xlsx
+8) last_run_stats.json
+
+9) duplicate_groups_overview.xlsx
    - Created inside each <category>_Duplicate folder
    - Columns: Group ID, Relation, FileName, Exact_sc, Near_sc, Assigned to, Action
 
-9) full_text_legacy_structure.txt
+10) full_text_legacy_structure.txt
    - Historical note describing the retired Excel full-text workbook layout
 
 Full-text archive behavior
@@ -55,6 +59,11 @@ Unsupported file inventory
 - `unsupported_files_report.txt` is always written per run.
 - It records unsupported files found in normal folders and inside `.zip` archives.
 - It also lists the top unsupported source folders for quick intake cleanup.
+- When unsupported files exist, `unsupported_cleanup.xlsx` is also written as a human review queue.
+- `cleanup_queue` columns:
+  - `FileType`, `FileName`, `FilePath`, `SourceKind`, `SourceFolder`
+  - `RecommendedAction`, `DeleteCandidate`, `Decision`, `DecisionNotes`, `ReviewedBy`, `FinalDisposition`
+- `cleanup_legend` documents the supported decision values and row colors.
 - Each line includes:
   - datatype / extension
   - file name

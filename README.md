@@ -58,6 +58,9 @@ Notes:
 - `unsupported_files_report.txt`
   - unsupported datatype counts and detailed skipped-file inventory with relative/logical paths
   - includes top noisy source folders to guide preprocessing before reruns
+- `unsupported_cleanup.xlsx`
+  - `cleanup_queue` sheet for human review of unsupported files before source cleanup
+  - `cleanup_legend` sheet with decision meanings and color coding
 - In each `<category>_Duplicate` folder:
   - `duplicate_groups_overview.xlsx` (group-review tracker with `Group ID`, `Relation`, `FileName`, `Exact_sc`, `Near_sc`, `Assigned to`, `Action`)
 
@@ -294,6 +297,7 @@ python docatlas.py --input "C:\path\to\docs" --output "C:\path\to\out" --app "Se
 - Workbook/report `FilePath` values are stored relative to the selected input root, not as machine-specific absolute paths.
 - Files discovered inside archives keep a logical relative path like `archive.zip!/inner/file.pdf` in reports and Excel outputs.
 - Unsupported files from normal folders and archive contents are skipped for extraction but recorded in `unsupported_files_report.txt`.
+- When unsupported files exist, DocAtlas also writes `unsupported_cleanup.xlsx` as a review queue with decisions like `Keep`, `Delete at Source`, `Ignore`, and `Needs Follow-up`.
 - Full extracted document text is archived by default in `<app>__docatlas_full_text.jsonl.gz`.
 - Tags are deduplicated and capped to a reasonable size.
 - `summary_report.txt` includes file type breakdown, category percentages, OCR usage count, duplicate group stats, and document length stats.

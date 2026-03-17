@@ -1203,14 +1203,7 @@ def unsupported_file_stats(items: List[UnsupportedFileRecord]) -> Dict[str, Any]
     for item in items:
         by_type[item.file_type] = by_type.get(item.file_type, 0) + 1
         by_source_kind[item.source_kind] = by_source_kind.get(item.source_kind, 0) + 1
-        normalized = str(item.file_path or "").replace("\\", "/").rstrip("/")
-        if "!/" in normalized:
-            archive, member = normalized.split("!/", 1)
-            member_parent = Path(member).parent.as_posix()
-            folder = f"{archive}!/{member_parent}" if member_parent not in ("", ".") else f"{archive}!/[root]"
-        else:
-            folder = str(Path(normalized).parent).replace("\\", "/")
-        folder = folder if folder not in ("", ".") else "[root]"
+        folder = unsupported_source_folder(str(item.file_path or ""))
         by_source_folder[folder] = by_source_folder.get(folder, 0) + 1
     return {
         "count": len(items),
@@ -1218,6 +1211,17 @@ def unsupported_file_stats(items: List[UnsupportedFileRecord]) -> Dict[str, Any]
         "by_source_kind": by_source_kind,
         "by_source_folder": by_source_folder,
     }
+
+
+def unsupported_source_folder(file_path: str) -> str:
+    normalized = str(file_path or "").replace("\\", "/").rstrip("/")
+    if "!/" in normalized:
+        archive, member = normalized.split("!/", 1)
+        member_parent = Path(member).parent.as_posix()
+        folder = f"{archive}!/{member_parent}" if member_parent not in ("", ".") else f"{archive}!/[root]"
+    else:
+        folder = str(Path(normalized).parent).replace("\\", "/")
+    return folder if folder not in ("", ".") else "[root]"
 
 
 def write_unsupported_files_report(out_dir: Path, items: List[UnsupportedFileRecord]) -> Path:
@@ -1244,6 +1248,184 @@ def write_unsupported_files_report(out_dir: Path, items: List[UnsupportedFileRec
         lines.append(f"- {item.file_type} | {item.file_name} | {item.file_path}")
     report_path.write_text("\n".join(lines), encoding="utf-8")
     return report_path
+
+
+def write_unsupported_cleanup_workbook(out_dir: Path, items: List[UnsupportedFileRecord]) -> Path:
+    workbook_path = out_dir / "unsupported_cleanup.xlsx"
+    stats = unsupported_file_stats(items)
+    by_source_folder = stats["by_source_folder"]
+
+    cleanup_rows: List[Dict[str, Any]] = []
+    for item in items:
+        source_folder = unsupported_source_folder(item.file_path)
+        cleanup_rows.append(
+            {
+                "FileType": item.file_type,
+                "FileName": item.file_name,
+                "FilePath": item.file_path,
+                "SourceKind": item.source_kind,
+                "SourceFolder": source_folder,
+                "RecommendedAction": "Review",
+                "DeleteCandidate": False,
+                "Decision": "",
+                "DecisionNotes": "",
+                "ReviewedBy": "",
+                "FinalDisposition": "",
+            }
+        )
+
+    cleanup_rows.sort(
+        key=lambda row: (
+            -int(by_source_folder.get(str(row["SourceFolder"]), 0)),
+            str(row["SourceFolder"]).lower(),
+            str(row["FileType"]).lower(),
+            str(row["FilePath"]).lower(),
+        )
+    )
+
+    queue_columns = [
+        "FileType",
+        "FileName",
+        "FilePath",
+        "SourceKind",
+        "SourceFolder",
+        "RecommendedAction",
+        "DeleteCandidate",
+        "Decision",
+        "DecisionNotes",
+        "ReviewedBy",
+        "FinalDisposition",
+    ]
+    queue_df = sanitize_excel_df(pd.DataFrame(cleanup_rows, columns=queue_columns))
+    legend_rows = [
+        {
+            "Decision": "Keep",
+            "Meaning": "Keep the unsupported file in place and do not delete it.",
+            "Use": "Use when the file should remain at source or needs no action.",
+            "Color": "Gray",
+        },
+        {
+            "Decision": "Delete at Source",
+            "Meaning": "Delete manually at the source after review approval.",
+            "Use": "Use only after a human confirms the file is safe to remove.",
+            "Color": "Red",
+        },
+        {
+            "Decision": "Ignore",
+            "Meaning": "Ignore the file for now and leave it out of the migration scope.",
+            "Use": "Use for low-priority items that should not block migration.",
+            "Color": "Yellow",
+        },
+        {
+            "Decision": "Needs Follow-up",
+            "Meaning": "Escalate for review because more context is needed.",
+            "Use": "Use when ownership, scope, or disposition is unclear.",
+            "Color": "Blue",
+        },
+    ]
+    legend_df = pd.DataFrame(legend_rows, columns=["Decision", "Meaning", "Use", "Color"])
+
+    with pd.ExcelWriter(workbook_path, engine="openpyxl") as writer:
+        queue_df.to_excel(writer, index=False, sheet_name="cleanup_queue")
+        legend_df.to_excel(writer, index=False, sheet_name="cleanup_legend")
+
+    try:
+        from openpyxl import load_workbook
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.formatting.rule import FormulaRule
+        from openpyxl.utils import get_column_letter
+        from openpyxl.worksheet.datavalidation import DataValidation
+
+        wb = load_workbook(workbook_path)
+        queue_ws = wb["cleanup_queue"]
+        legend_ws = wb["cleanup_legend"]
+
+        queue_ws.freeze_panes = "A2"
+        queue_ws.auto_filter.ref = f"A1:{get_column_letter(queue_ws.max_column)}{queue_ws.max_row}"
+        queue_ws.row_dimensions[1].height = 28
+
+        header_fill = PatternFill(fill_type="solid", fgColor="1F4E78")
+        header_font = Font(color="FFFFFF", bold=True)
+        header_alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        wrap_alignment = Alignment(wrap_text=True, vertical="top")
+        top_alignment = Alignment(vertical="top")
+        widths = {
+            "A": 14,
+            "B": 32,
+            "C": 70,
+            "D": 16,
+            "E": 52,
+            "F": 20,
+            "G": 16,
+            "H": 18,
+            "I": 42,
+            "J": 18,
+            "K": 22,
+        }
+        wrap_cols = {"B", "C", "E", "F", "I", "K"}
+
+        for cell in queue_ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_alignment
+        for col_letter, width in widths.items():
+            queue_ws.column_dimensions[col_letter].width = width
+        for row in range(2, queue_ws.max_row + 1):
+            for col in range(1, queue_ws.max_column + 1):
+                col_letter = get_column_letter(col)
+                queue_ws.cell(row=row, column=col).alignment = wrap_alignment if col_letter in wrap_cols else top_alignment
+
+        decision_validation = DataValidation(
+            type="list",
+            formula1='"Keep,Delete at Source,Ignore,Needs Follow-up"',
+            allow_blank=True,
+        )
+        decision_validation.prompt = "Choose the reviewed disposition for this unsupported file."
+        decision_validation.error = "Select one of the allowed decision values."
+        queue_ws.add_data_validation(decision_validation)
+        decision_validation.add(f"H2:H{queue_ws.max_row}")
+
+        queue_range = f"A2:{get_column_letter(queue_ws.max_column)}{queue_ws.max_row}"
+        for formula, color in [
+            ('=$H2="Keep"', "E7E6E6"),
+            ('=$H2="Delete at Source"', "FDE9D9"),
+            ('=$H2="Ignore"', "FFF2CC"),
+            ('=$H2="Needs Follow-up"', "D9EAF7"),
+        ]:
+            queue_ws.conditional_formatting.add(
+                queue_range,
+                FormulaRule(formula=[formula], fill=PatternFill(fill_type="solid", fgColor=color)),
+            )
+
+        legend_ws.freeze_panes = "A2"
+        legend_ws.auto_filter.ref = f"A1:{get_column_letter(legend_ws.max_column)}{legend_ws.max_row}"
+        legend_widths = {"A": 20, "B": 44, "C": 44, "D": 12}
+        for cell in legend_ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = header_alignment
+        for col_letter, width in legend_widths.items():
+            legend_ws.column_dimensions[col_letter].width = width
+        for row in range(2, legend_ws.max_row + 1):
+            for col in range(1, legend_ws.max_column + 1):
+                legend_ws.cell(row=row, column=col).alignment = wrap_alignment
+        legend_color_map = {
+            "Keep": "E7E6E6",
+            "Delete at Source": "FDE9D9",
+            "Ignore": "FFF2CC",
+            "Needs Follow-up": "D9EAF7",
+        }
+        for row in range(2, legend_ws.max_row + 1):
+            decision = str(legend_ws.cell(row=row, column=1).value or "")
+            color = legend_color_map.get(decision)
+            if color:
+                legend_ws.cell(row=row, column=1).fill = PatternFill(fill_type="solid", fgColor=color)
+
+        wb.save(workbook_path)
+    except Exception:
+        pass
+
+    return workbook_path
 
 
 def load_last_run_stats(out_dir: Path) -> Optional[Dict[str, Any]]:
@@ -4289,6 +4471,9 @@ def run_pipeline(
         try:
             unsupported_report_path = write_unsupported_files_report(output_dir, unsupported_files)
             logging.info("Wrote unsupported files report: %s", unsupported_report_path)
+            if unsupported_files:
+                cleanup_workbook_path = write_unsupported_cleanup_workbook(output_dir, unsupported_files)
+                logging.info("Wrote unsupported cleanup workbook: %s", cleanup_workbook_path)
             report_path = write_summary_report(output_dir, [], [], unsupported_files, [], get_usage(), total_files, len(files), limit)
             logging.info("Wrote %s", report_path)
         except Exception as exc:
@@ -4746,6 +4931,9 @@ def run_pipeline(
     try:
         unsupported_report_path = write_unsupported_files_report(output_dir, unsupported_files)
         logging.info("Wrote unsupported files report: %s", unsupported_report_path)
+        if unsupported_files:
+            cleanup_workbook_path = write_unsupported_cleanup_workbook(output_dir, unsupported_files)
+            logging.info("Wrote unsupported cleanup workbook: %s", cleanup_workbook_path)
         report_path = write_summary_report(output_dir, docs, articles, unsupported_files, errors, usage, total_files, len(files), limit)
         logging.info("Wrote %s", report_path)
     except Exception as exc:
@@ -4819,6 +5007,9 @@ def run_pipeline_parallel(
         try:
             unsupported_report_path = write_unsupported_files_report(output_dir, unsupported_files)
             logging.info("Wrote unsupported files report: %s", unsupported_report_path)
+            if unsupported_files:
+                cleanup_workbook_path = write_unsupported_cleanup_workbook(output_dir, unsupported_files)
+                logging.info("Wrote unsupported cleanup workbook: %s", cleanup_workbook_path)
             report_path = write_summary_report(output_dir, [], [], unsupported_files, [], get_usage(), total_files, len(files), limit)
             logging.info("Wrote %s", report_path)
         except Exception as exc:
@@ -5317,6 +5508,9 @@ def run_pipeline_parallel(
     try:
         unsupported_report_path = write_unsupported_files_report(output_dir, unsupported_files)
         logging.info("Wrote unsupported files report: %s", unsupported_report_path)
+        if unsupported_files:
+            cleanup_workbook_path = write_unsupported_cleanup_workbook(output_dir, unsupported_files)
+            logging.info("Wrote unsupported cleanup workbook: %s", cleanup_workbook_path)
         report_path = write_summary_report(output_dir, docs, articles, unsupported_files, errors, usage, total_files, len(files), limit)
         logging.info("Wrote %s", report_path)
     except Exception as exc:

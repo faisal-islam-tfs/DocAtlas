@@ -129,6 +129,52 @@ class DocAtlasRegressionTests(unittest.TestCase):
         docatlas.setup_logging(out_dir)
         self.addCleanup(logging.shutdown)
 
+    def test_write_unsupported_cleanup_workbook_formats_and_sorts(self) -> None:
+        output_dir = self.make_tempdir()
+        items = [
+            docatlas.UnsupportedFileRecord("b.msg", "team/inbox/b.msg", ".msg", "file"),
+            docatlas.UnsupportedFileRecord("a.url", "team/inbox/a.url", ".url", "file"),
+            docatlas.UnsupportedFileRecord("inside.bin", "bundle.zip!/nested/inside.bin", ".bin", "zip_member"),
+            docatlas.UnsupportedFileRecord("broken.zip", "broken.zip", ".zip", "invalid_zip"),
+            docatlas.UnsupportedFileRecord("c.url", "other/c.url", ".url", "file"),
+        ]
+
+        workbook_path = docatlas.write_unsupported_cleanup_workbook(output_dir, items)
+
+        self.assertTrue(workbook_path.exists())
+        wb = load_workbook(workbook_path)
+        self.assertEqual(wb.sheetnames, ["cleanup_queue", "cleanup_legend"])
+
+        queue_ws = wb["cleanup_queue"]
+        headers = [queue_ws.cell(row=1, column=c).value for c in range(1, queue_ws.max_column + 1)]
+        self.assertEqual(
+            headers,
+            [
+                "FileType",
+                "FileName",
+                "FilePath",
+                "SourceKind",
+                "SourceFolder",
+                "RecommendedAction",
+                "DeleteCandidate",
+                "Decision",
+                "DecisionNotes",
+                "ReviewedBy",
+                "FinalDisposition",
+            ],
+        )
+        self.assertEqual(queue_ws.freeze_panes, "A2")
+        self.assertEqual(queue_ws.auto_filter.ref, "A1:K6")
+        self.assertEqual(len(queue_ws.data_validations.dataValidation), 1)
+        self.assertTrue(len(queue_ws.conditional_formatting) >= 1)
+        self.assertEqual(queue_ws["E2"].value, "team/inbox")
+        self.assertEqual(queue_ws["E3"].value, "team/inbox")
+        self.assertEqual(queue_ws["F2"].value, "Review")
+        self.assertFalse(bool(queue_ws["G2"].value))
+        legend_ws = wb["cleanup_legend"]
+        self.assertEqual(legend_ws["A2"].value, "Keep")
+        self.assertEqual(legend_ws["A5"].value, "Needs Follow-up")
+
     def test_process_file_supports_xls_via_conversion(self) -> None:
         root = self.make_tempdir()
         xls_path = root / "legacy.xls"
@@ -609,6 +655,7 @@ class DocAtlasRegressionTests(unittest.TestCase):
         self.assertEqual(wb.sheetnames, ["Documents", "Duplicates"])
         self.assertTrue((output_dir / "TestApp__docatlas_full_text.jsonl.gz").exists())
         self.assertFalse((output_dir / "TestApp__docatlas_full_text.xlsx").exists())
+        self.assertFalse((output_dir / "unsupported_cleanup.xlsx").exists())
         docs_df = pd.read_excel(peers_path, sheet_name="Documents")
         self.assertEqual(
             sorted(docs_df["FilePath"].astype(str).tolist()),
@@ -693,6 +740,7 @@ class DocAtlasRegressionTests(unittest.TestCase):
         self.assertFalse((output_dir / "TestApp__docatlas_summaries.xlsx").exists())
         summary_text = (output_dir / "summary_report.txt").read_text(encoding="utf-8")
         unsupported_text = (output_dir / "unsupported_files_report.txt").read_text(encoding="utf-8")
+        cleanup_wb = load_workbook(output_dir / "unsupported_cleanup.xlsx")
         self.assertIn("total_unsupported_files: 3", summary_text)
         self.assertIn("- .mp4: 1", summary_text)
         self.assertIn("- .url: 1", summary_text)
@@ -700,6 +748,52 @@ class DocAtlasRegressionTests(unittest.TestCase):
         self.assertIn("Detailed List:", unsupported_text)
         self.assertIn(".url | link.url | link.url", unsupported_text)
         self.assertIn(".zip | broken.zip | broken.zip", unsupported_text)
+        self.assertEqual(cleanup_wb.sheetnames, ["cleanup_queue", "cleanup_legend"])
+        queue_df = pd.read_excel(output_dir / "unsupported_cleanup.xlsx", sheet_name="cleanup_queue")
+        self.assertEqual(len(queue_df), 3)
+        self.assertEqual(queue_df["RecommendedAction"].tolist(), ["Review", "Review", "Review"])
+        self.assertTrue((queue_df["DeleteCandidate"] == False).all())
+
+    def test_run_pipeline_writes_unsupported_cleanup_workbook_for_mixed_input(self) -> None:
+        root = self.make_tempdir()
+        input_dir = root / "input"
+        output_dir = root / "output"
+        write_xlsx(
+            input_dir / "sub" / "direct.xlsx",
+            " ".join(["mixed pipeline content application note guide"] * 20),
+        )
+        (input_dir / "sub" / "shortcut.url").write_text("[InternetShortcut]\nURL=https://example.com\n", encoding="utf-8")
+        with zipfile.ZipFile(input_dir / "bundle.zip", "w") as zf:
+            zf.writestr(
+                "nested/inside.xlsx",
+                make_workbook_bytes(" ".join(["mixed zipped content"] * 25)),
+            )
+            zf.writestr("nested/inside.url", "[InternetShortcut]\nURL=https://example.com\n")
+
+        docatlas.run_pipeline(
+            input_dir=input_dir,
+            output_dir=output_dir,
+            categories=["Other"],
+            cfg=dummy_cfg(),
+            dry_run=True,
+            use_resume=False,
+            ocrmypdf_enabled=False,
+            app_name="TestApp",
+            embeddings_source="document",
+            append_excel=False,
+            category_path_map=self.category_path_map(),
+            include_full_text_output=False,
+            no_move=True,
+            articles_enabled=False,
+        )
+        self.addCleanup(logging.shutdown)
+
+        self.assertTrue((output_dir / "TestApp__docatlas_summaries.xlsx").exists())
+        cleanup_df = pd.read_excel(output_dir / "unsupported_cleanup.xlsx", sheet_name="cleanup_queue")
+        self.assertEqual(len(cleanup_df), 2)
+        self.assertEqual(set(cleanup_df["SourceKind"].astype(str)), {"file", "zip_member"})
+        self.assertIn("sub", set(cleanup_df["SourceFolder"].astype(str)))
+        self.assertIn("bundle.zip!/nested", set(cleanup_df["SourceFolder"].astype(str)))
 
     def test_resolve_cli_interactive_inputs_prompts_for_missing_values(self) -> None:
         root = self.make_tempdir()

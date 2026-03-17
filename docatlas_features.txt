@@ -6,6 +6,7 @@ Input & Extraction
 - Auto-unpacks .zip archives into a temporary staging area and processes supported files inside them
 - Stores workbook-facing source paths relative to the selected input root
 - Records unsupported files from normal folders and zip contents for intake reporting
+- Writes `unsupported_cleanup.xlsx` for human unsupported-file review when skipped files are present
 - .doc auto-converted to .docx via LibreOffice (if installed)
 - .xls auto-converted to .xlsx via LibreOffice (if installed)
 - PDF extraction via pdfplumber
@@ -46,6 +47,7 @@ Outputs
 - *_docatlas_full_text.jsonl.gz (written by default; one JSON object per document, gzip-compressed)
 - summary_report.txt
 - unsupported_files_report.txt
+- unsupported_cleanup.xlsx
 - duplicate_groups_overview.xlsx inside each <category>_Duplicate folder
 - resume.json (cache)
 - last_run_stats.json (baseline for estimates)
@@ -85,6 +87,7 @@ Reporting & Cost
 - Extraction status counts
 - File type breakdown and category percentages
 - Unsupported file counts by datatype/source kind, plus top noisy source folders and a dedicated unsupported file inventory report
+- Human review queue for unsupported files with decisions, notes, reviewer, and final disposition
 - OCR usage count and duplicate group stats
 - Document length stats (avg/longest/shortest)
 - Errors captured per file and reported without stopping the run
