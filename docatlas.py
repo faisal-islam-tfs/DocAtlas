@@ -2023,6 +2023,27 @@ def sanitize_excel_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def drop_duplicate_header_rows(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    columns = list(df.columns)
+    if not columns:
+        return df
+
+    keep_mask: List[bool] = []
+    for row in df.itertuples(index=False, name=None):
+        is_header_row = True
+        for col_name, value in zip(columns, row):
+            if str(value) != str(col_name):
+                is_header_row = False
+                break
+        keep_mask.append(not is_header_row)
+
+    if all(keep_mask):
+        return df
+    return df.loc[keep_mask].reset_index(drop=True)
+
+
 def load_category_path_map(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
@@ -2251,6 +2272,7 @@ def write_import_excel(
     import_path = out_dir / f"{app_slug}__docatlas_import.xlsx"
     columns = ["Id", "Path", "Title", "Content", "Summary", "Tags", "Attachments", "AutoPublish", "ArticleType"]
     new_df = sanitize_excel_df(pd.DataFrame(import_rows, columns=columns))
+    new_df = drop_duplicate_header_rows(new_df)
 
     if append_excel and import_path.exists():
         try:
@@ -2258,12 +2280,14 @@ def write_import_excel(
         except Exception:
             existing_df = pd.DataFrame(columns=columns)
         existing_df = sanitize_excel_df(existing_df)
+        existing_df = drop_duplicate_header_rows(existing_df)
         if "Id" in existing_df.columns and "Id" in new_df.columns:
             existing_ids = set(existing_df["Id"].astype(str))
             new_df = new_df[~new_df["Id"].astype(str).isin(existing_ids)]
         out_df = pd.concat([existing_df, new_df], ignore_index=True)
     else:
         out_df = new_df
+    out_df = drop_duplicate_header_rows(out_df)
 
     with pd.ExcelWriter(import_path, engine="openpyxl") as writer:
         out_df.to_excel(writer, index=False, sheet_name="import")
@@ -3950,6 +3974,7 @@ def write_excels(
     if append_excel and peers_path.exists():
         try:
             existing_docs_df = pd.read_excel(peers_path, sheet_name="Documents")
+            existing_docs_df = drop_duplicate_header_rows(sanitize_excel_df(existing_docs_df))
             if "file_key" in existing_docs_df.columns:
                 existing_doc_keys = set(existing_docs_df["file_key"].astype(str))
             if "file_path" in existing_docs_df.columns:
@@ -3964,10 +3989,12 @@ def write_excels(
             existing_doc_paths = set()
         try:
             existing_dups_df = pd.read_excel(peers_path, sheet_name="Duplicates")
+            existing_dups_df = drop_duplicate_header_rows(sanitize_excel_df(existing_dups_df))
         except Exception:
             existing_dups_df = None
         try:
             existing_articles_df = pd.read_excel(peers_path, sheet_name="Articles")
+            existing_articles_df = drop_duplicate_header_rows(sanitize_excel_df(existing_articles_df))
         except Exception:
             existing_articles_df = None
 
@@ -4102,17 +4129,21 @@ def write_excels(
         "DuplicateOf",
     ]
 
-    docs_df = sanitize_excel_df(pd.DataFrame(docs_rows, columns=docs_columns))
-    dups_df = sanitize_excel_df(pd.DataFrame(dup_rows, columns=dups_columns))
+    docs_df = drop_duplicate_header_rows(sanitize_excel_df(pd.DataFrame(docs_rows, columns=docs_columns)))
+    dups_df = drop_duplicate_header_rows(sanitize_excel_df(pd.DataFrame(dup_rows, columns=dups_columns)))
     articles_df: Optional[pd.DataFrame] = None
     if articles_enabled:
-        articles_df = sanitize_excel_df(pd.DataFrame(article_rows, columns=articles_columns))
+        articles_df = drop_duplicate_header_rows(sanitize_excel_df(pd.DataFrame(article_rows, columns=articles_columns)))
     if append_excel and existing_docs_df is not None:
         docs_df = pd.concat([existing_docs_df, docs_df], ignore_index=True)
     if append_excel and existing_dups_df is not None:
         dups_df = pd.concat([existing_dups_df, dups_df], ignore_index=True)
     if articles_enabled and append_excel and existing_articles_df is not None and articles_df is not None:
         articles_df = pd.concat([existing_articles_df, articles_df], ignore_index=True)
+    docs_df = drop_duplicate_header_rows(docs_df)
+    dups_df = drop_duplicate_header_rows(dups_df)
+    if articles_df is not None:
+        articles_df = drop_duplicate_header_rows(articles_df)
     if not dups_df.empty:
         if "DupScore" in dups_df.columns:
             dups_df["DupScore"] = pd.to_numeric(dups_df["DupScore"], errors="coerce").fillna(0.0)

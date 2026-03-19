@@ -598,6 +598,66 @@ class DocAtlasRegressionTests(unittest.TestCase):
         self.assertEqual([record["file_key"] for record in records], ["key-1", "key-2"])
         self.assertEqual(records[1]["full_text"], "second body text")
 
+    def test_write_excels_strips_duplicate_header_rows_on_append(self) -> None:
+        out_dir = self.make_tempdir()
+        self.prepare_logging(out_dir)
+        doc = sample_doc("20260305111752-DOC-00001", "key-1", "sub/a.xlsx")
+        docatlas.write_excels(
+            out_dir=out_dir,
+            docs=[doc],
+            articles=[],
+            full_text_rows=[{"doc_id": doc.doc_id, "file_key": doc.file_key, "file_name": doc.file_name, "file_path": doc.file_path, "category": doc.category, "short_summary": doc.short_summary, "long_summary": doc.long_summary, "tags": ", ".join(doc.tags), "word_count": doc.word_count, "char_count": doc.char_count, "extraction_status": doc.extraction_status, "review_flags": doc.review_flags, "moved_to": doc.moved_to, "full_text": "body text"}],
+            app_name="TestApp",
+            append_excel=False,
+            category_path_map=self.category_path_map(),
+            include_full_text_output=False,
+            articles_enabled=False,
+        )
+
+        peers_path = out_dir / "TestApp__docatlas_summaries.xlsx"
+        import_path = out_dir / "TestApp__docatlas_import.xlsx"
+
+        wb = load_workbook(peers_path)
+        ws = wb["Documents"]
+        ws.append([cell.value for cell in ws[1]])
+        wb.save(peers_path)
+        wb.close()
+
+        wb = load_workbook(import_path)
+        ws = wb["import"]
+        ws.append([cell.value for cell in ws[1]])
+        wb.save(import_path)
+        wb.close()
+
+        docatlas.write_excels(
+            out_dir=out_dir,
+            docs=[],
+            articles=[],
+            full_text_rows=[],
+            app_name="TestApp",
+            append_excel=True,
+            category_path_map=self.category_path_map(),
+            include_full_text_output=False,
+            articles_enabled=False,
+        )
+
+        wb = load_workbook(peers_path, read_only=True, data_only=True)
+        ws = wb["Documents"]
+        rows = list(ws.iter_rows(values_only=True))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1][1], "sub/a.xlsx")
+        wb.close()
+
+        wb = load_workbook(import_path, read_only=True, data_only=True)
+        ws = wb["import"]
+        rows = list(ws.iter_rows(values_only=True))
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            rows[1][1],
+            "/Life_Sciences/Life_Science_Applications/TestApp/Other/Other_Documentation",
+        )
+        wb.close()
+
     def test_write_excels_omits_articles_sheet_when_disabled(self) -> None:
         out_dir = self.make_tempdir()
         self.prepare_logging(out_dir)
