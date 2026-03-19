@@ -97,13 +97,15 @@
     "Liquid Cell Culture": "/Life_Sciences/Life_Science_Applications/Cell_Culture/Cell_Culture_Media/Liquid_Cell_Culture",
     "Cell Culture Antibiotics": "/Life_Sciences/Life_Science_Applications/Cell_Culture/Cell_Culture_Reagents_Antibiotics_and_Supplements/Cell_Culture_Antibiotics",
     "Dissociation Reagents": "/Life_Sciences/Life_Science_Applications/Cell_Culture/Cell_Culture_Reagents_Antibiotics_and_Supplements/Dissociation_Reagents",
+    "Cell Isolation": "/Life_Sciences/Life_Science_Applications/Cell_Culture/Cell_Culture_Reagents_Antibiotics_and_Supplements/Cell_Isolation",
     "Growth Factors and Hormones": "/Life_Sciences/Life_Science_Applications/Cell_Culture/Cell_Culture_Reagents_Antibiotics_and_Supplements/Growth_Factors_and_Hormones",
     "Nutritional Supplements and Other Reagents": "/Life_Sciences/Life_Science_Applications/Cell_Culture/Cell_Culture_Reagents_Antibiotics_and_Supplements/Nutritional_Supplements_and_Other_Reagents",
     "Sera": "/Life_Sciences/Life_Science_Applications/Cell_Culture/Sera",
     "ECM and 3D Culture": "/Life_Sciences/Life_Science_Applications/Cell_Culture/ECM_and_3D_Culture",
     "Reprogramming": "/Life_Sciences/Life_Science_Applications/Cell_Culture/Reprogramming",
     "Porous and Capture Select": "/Life_Sciences/Life_Science_Applications/Cell_Culture/Porous_and_Capture_Select",
-    "Cell Culture Plastics": "/Life_Sciences/Life_Science_Applications/Cell_Culture/Cell_Culture_Plastics"
+    "Cell Culture Plastics": "/Life_Sciences/Life_Science_Applications/Cell_Culture/Cell_Culture_Plastics",
+    "Gibco manufacturing and packaging docs": "/Life_Sciences/Life_Science_Applications/Cell_Culture/Gibco_Manufacturing_and_Packaging_Docs"
   },
   "Cell and Gene Therapy": {
     "Compleo Applications": "/Life_Sciences/Life_Science_Applications/Cell_and_Gene_Therapy/CTS_Applications/Compleo_Applications",

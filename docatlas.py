@@ -220,6 +220,25 @@ SUMMARY_STOPWORDS = {
 # Deterministic category hints tuned for qPCR-style corpora.
 # Keys are normalized category names.
 CATEGORY_HINT_PHRASES: Dict[str, List[Tuple[str, float]]] = {
+    "agt media": [
+        ("agt media", 4.5),
+        ("advanced granulation technology", 2.8),
+    ],
+    "cell culture antibiotics": [
+        ("antibiotic", 2.6),
+        ("antibiotics", 2.6),
+        ("antimycotic", 2.4),
+        ("penicillin streptomycin", 3.4),
+        ("gentamicin", 2.4),
+    ],
+    "cell isolation": [
+        ("cell isolation", 4.5),
+        ("primary cell isolation", 4.8),
+        ("cell isolation kit", 4.2),
+        ("isolation kit", 2.8),
+        ("cardiomyocyte isolation", 4.0),
+        ("neuron isolation", 4.0),
+    ],
     "assay design": [
         ("assay design", 0.8),
         ("design tool", 2.5),
@@ -239,6 +258,20 @@ CATEGORY_HINT_PHRASES: Dict[str, List[Tuple[str, float]]] = {
         ("z-score", 2.0),
         ("delta ct", 1.8),
         ("ddct", 1.8),
+    ],
+    "dissociation reagents": [
+        ("dissociation", 4.2),
+        ("dissociation reagent", 4.2),
+        ("detachment", 2.8),
+        ("tryple", 4.0),
+        ("trypsin", 3.2),
+        ("accutase", 3.8),
+        ("accumax", 3.2),
+        ("cell stripper", 3.2),
+    ],
+    "dpm": [
+        ("dpm media", 4.2),
+        ("dpm", 2.6),
     ],
     "gene expression": [
         ("gene expression", 5.0),
@@ -287,12 +320,36 @@ CATEGORY_HINT_PHRASES: Dict[str, List[Tuple[str, float]]] = {
         ("quantstudio", 3.0),
         ("platform", 1.6),
     ],
+    "gibco manufacturing and packaging docs": [
+        ("gibco manufacturing", 4.6),
+        ("manufacturing and packaging", 4.2),
+        ("packaging docs", 4.0),
+        ("label claim", 2.6),
+    ],
     "data analysis": [
         ("data analysis", 3.2),
         ("software", 2.0),
         ("threshold", 1.5),
         ("baseline", 1.4),
         ("normalization", 1.6),
+    ],
+    "liquid cell culture": [
+        ("liquid media", 4.2),
+        ("liquid cell culture", 4.6),
+        ("basal medium", 2.8),
+    ],
+    "ecm and 3d culture": [
+        ("extracellular matrix", 4.2),
+        ("3d culture", 4.4),
+        ("three dimensional culture", 4.0),
+        ("matrix", 1.8),
+        ("hydrogel", 2.4),
+    ],
+    "nutritional supplements and other reagents": [
+        ("nutritional supplement", 4.2),
+        ("nutritional supplements", 4.2),
+        ("supplement", 1.8),
+        ("feed supplement", 2.4),
     ],
     "qc": [
         ("quality control", 4.0),
@@ -480,15 +537,35 @@ CATEGORY_REQUIRED_TOKEN_HITS: Dict[str, int] = {
 }
 
 CATEGORY_PATH_COMPONENT_HINTS: Dict[str, List[Tuple[str, float]]] = {
+    "agt media": [
+        ("cell culture media", 2.2),
+        ("agt media", 5.0),
+    ],
     "arctus": [
         ("arcturus", 5.0),
         ("lcm", 2.5),
+    ],
+    "cell culture antibiotics": [
+        ("cell culture reagents antibiotics and supplements", 2.8),
+        ("antibiotics", 4.8),
+    ],
+    "cell isolation": [
+        ("cell culture reagents antibiotics and supplements", 2.8),
+        ("cell isolation and dissociation reagents", 4.8),
     ],
     "custom dna oligos": [
         ("custom dna oligos", 4.5),
         ("oligo files", 4.0),
         ("randall primers", 3.2),
         ("primers", 2.2),
+    ],
+    "dissociation reagents": [
+        ("cell culture reagents antibiotics and supplements", 2.8),
+        ("cell isolation and dissociation reagents", 4.2),
+    ],
+    "dpm": [
+        ("cell culture media", 2.2),
+        ("dpm media", 5.0),
     ],
     "dynabeads": [
         ("dynabeads", 4.8),
@@ -501,6 +578,16 @@ CATEGORY_PATH_COMPONENT_HINTS: Dict[str, List[Tuple[str, float]]] = {
         ("safe imager", 3.8),
         ("ibases", 3.0),
         ("ibase", 3.8),
+    ],
+    "ecm and 3d culture": [
+        ("extracellular matrices and 3d cultures", 5.0),
+    ],
+    "gibco manufacturing and packaging docs": [
+        ("gibco manufacturing and packaging docs", 5.0),
+    ],
+    "liquid cell culture": [
+        ("cell culture media", 2.2),
+        ("liquid media", 5.0),
     ],
     "magmax and kingfisher": [
         ("magmax & kingfisher", 4.6),
@@ -521,6 +608,10 @@ CATEGORY_PATH_COMPONENT_HINTS: Dict[str, List[Tuple[str, float]]] = {
         ("nanodrop eight", 4.0),
         ("nanodrop one onec", 4.0),
         ("nanodrop onec", 3.8),
+    ],
+    "nutritional supplements and other reagents": [
+        ("cell culture reagents antibiotics and supplements", 2.8),
+        ("nutritional supplements", 5.0),
     ],
     "protein expression": [
         ("protein expression", 4.8),

@@ -382,6 +382,44 @@ class DocAtlasRegressionTests(unittest.TestCase):
             self.assertIn("Nanodrop", path_map[app_name])
             self.assertIn("Protein expression", path_map[app_name])
 
+    def test_cell_culture_config_includes_gibco_docs_and_cell_isolation(self) -> None:
+        with open("applications.json", encoding="utf-8") as fh:
+            app_config = json.load(fh)["applications"]
+        with open("category_path_map.json", encoding="utf-8") as fh:
+            path_map = json.load(fh)
+
+        self.assertIn("Cell Isolation", app_config["Cell Culture"])
+        self.assertIn("Gibco manufacturing and packaging docs", app_config["Cell Culture"])
+        self.assertIn("Cell Isolation", path_map["Cell Culture"])
+        self.assertIn("Gibco manufacturing and packaging docs", path_map["Cell Culture"])
+
+    def test_infer_category_uses_path_hints_for_gibco_docs(self) -> None:
+        category = docatlas._infer_category_from_text(
+            "Packaging specification and manufacturing label change guidance for Gibco product lines.",
+            ["Gibco manufacturing and packaging docs", "Liquid Cell Culture", "Other"],
+            file_name="Gibco_Label_Claim_Change.pdf",
+            file_path="Gibco manufacturing and packaging docs/Gibco_Label_Claim_Change.pdf",
+        )
+        self.assertEqual(category, "Gibco manufacturing and packaging docs")
+
+    def test_infer_category_prefers_cell_isolation_for_primary_cell_kit_content(self) -> None:
+        category = docatlas._infer_category_from_text(
+            "Primary cell isolation kit overview for neuron and cardiomyocyte isolation workflows.",
+            ["Cell Isolation", "Dissociation Reagents", "Other"],
+            file_name="Primary Cell Isolation Kits.ppt",
+            file_path="Cell culture reagents antibiotics and supplements/Cell Isolation and Dissociation reagents/Primary Cell Isolation Kits.ppt",
+        )
+        self.assertEqual(category, "Cell Isolation")
+
+    def test_infer_category_maps_extracellular_matrices_to_ecm_and_3d_culture(self) -> None:
+        category = docatlas._infer_category_from_text(
+            "Extracellular matrix hydrogel support for 3D culture and organoid workflows.",
+            ["ECM and 3D Culture", "Other"],
+            file_name="Basement_Membrane_Matrix_Guide.pdf",
+            file_path="Extracellular matrices and 3D cultures/Basement_Membrane_Matrix_Guide.pdf",
+        )
+        self.assertEqual(category, "ECM and 3D Culture")
+
     def test_list_files_discovers_zip_members_with_logical_paths(self) -> None:
         input_dir = self.make_tempdir()
         write_xlsx(
