@@ -675,7 +675,13 @@ class DocAtlasRegressionTests(unittest.TestCase):
         )
 
         wb = load_workbook(out_dir / "TestApp__docatlas_summaries.xlsx")
-        self.assertEqual(wb.sheetnames, ["Documents", "Duplicates"])
+        self.assertEqual(wb.sheetnames, ["Documents", "Duplicates", "duplicate_review_legend"])
+        self.assertEqual(
+            [cell.value for cell in wb["Duplicates"][1]][-4:],
+            ["GroupReviewed", "Decision", "DecisionNotes", "ReviewedBy"],
+        )
+        self.assertEqual(list(wb["Documents"].tables.keys()), [])
+        self.assertEqual(list(wb["Duplicates"].tables.keys()), [])
         self.assertTrue((out_dir / "TestApp__docatlas_full_text.jsonl.gz").exists())
         self.assertFalse((out_dir / "TestApp__docatlas_full_text.xlsx").exists())
 
@@ -750,7 +756,7 @@ class DocAtlasRegressionTests(unittest.TestCase):
 
         peers_path = output_dir / "TestApp__docatlas_summaries.xlsx"
         wb = load_workbook(peers_path)
-        self.assertEqual(wb.sheetnames, ["Documents", "Duplicates"])
+        self.assertEqual(wb.sheetnames, ["Documents", "Duplicates", "duplicate_review_legend"])
         self.assertTrue((output_dir / "TestApp__docatlas_full_text.jsonl.gz").exists())
         self.assertFalse((output_dir / "TestApp__docatlas_full_text.xlsx").exists())
         self.assertFalse((output_dir / "unsupported_cleanup.xlsx").exists())
@@ -799,7 +805,7 @@ class DocAtlasRegressionTests(unittest.TestCase):
 
         peers_path = output_dir / "TestApp__docatlas_summaries.xlsx"
         wb = load_workbook(peers_path)
-        self.assertEqual(wb.sheetnames, ["Documents", "Duplicates"])
+        self.assertEqual(wb.sheetnames, ["Documents", "Duplicates", "duplicate_review_legend"])
         self.assertTrue((output_dir / "TestApp__docatlas_full_text.jsonl.gz").exists())
         self.assertFalse((output_dir / "TestApp__docatlas_full_text.xlsx").exists())
         docs_df = pd.read_excel(peers_path, sheet_name="Documents")
@@ -807,6 +813,54 @@ class DocAtlasRegressionTests(unittest.TestCase):
             sorted(docs_df["FilePath"].astype(str).tolist()),
             ["a/one.xlsx", "bundle.zip!/nested/two.xlsx"],
         )
+
+    def test_write_excels_core_duplicate_review_workflow_is_present(self) -> None:
+        out_dir = self.make_tempdir()
+        self.prepare_logging(out_dir)
+        docs = [
+            sample_doc("20260305111754-DOC-00001", "key-1", "sub/a.xlsx", category="Other"),
+            sample_doc("20260305111754-DOC-00002", "key-2", "sub/b.xlsx", category="Other"),
+        ]
+        docs[0].review_group_id = "RGRP-0001"
+        docs[0].near_duplicate_of = "DOC-00002"
+        docs[0].near_dup_score = 0.91
+        docs[0].duplicate_relation_type = "near"
+        docs[1].review_group_id = "RGRP-0001"
+        docs[1].near_duplicate_of = "DOC-00001"
+        docs[1].near_dup_score = 0.91
+        docs[1].duplicate_relation_type = "near"
+
+        docatlas.write_excels(
+            out_dir=out_dir,
+            docs=docs,
+            articles=[],
+            full_text_rows=[],
+            app_name="TestApp",
+            append_excel=False,
+            category_path_map=self.category_path_map(),
+            include_full_text_output=False,
+            articles_enabled=False,
+        )
+
+        peers_path = out_dir / "TestApp__docatlas_summaries.xlsx"
+        wb = load_workbook(peers_path)
+        self.assertIn("duplicate_review_legend", wb.sheetnames)
+        dup_ws = wb["Duplicates"]
+        self.assertEqual(
+            [cell.value for cell in dup_ws[1]][-4:],
+            ["GroupReviewed", "Decision", "DecisionNotes", "ReviewedBy"],
+        )
+        self.assertEqual(dup_ws.freeze_panes, "A2")
+        self.assertIsNotNone(dup_ws.auto_filter.ref)
+        self.assertTrue(len(dup_ws.conditional_formatting) >= 1)
+        self.assertEqual(list(wb["Documents"].tables.keys()), [])
+        self.assertEqual(list(dup_ws.tables.keys()), [])
+        legend_ws = wb["duplicate_review_legend"]
+        self.assertEqual([cell.value for cell in legend_ws[1]], ["Field", "Allowed Values", "Meaning"])
+        dv_formulas = [dv.formula1 for dv in dup_ws.data_validations.dataValidation]
+        self.assertIn('"Reviewed,Unfinished"', dv_formulas)
+        self.assertIn('"Primary,Keep,Drop,Needs Review"', dv_formulas)
+        wb.close()
 
     def test_run_pipeline_writes_unsupported_reports_for_only_skipped_files(self) -> None:
         root = self.make_tempdir()

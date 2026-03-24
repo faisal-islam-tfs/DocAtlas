@@ -2044,6 +2044,14 @@ def drop_duplicate_header_rows(df: pd.DataFrame) -> pd.DataFrame:
     return df.loc[keep_mask].reset_index(drop=True)
 
 
+def ensure_duplicate_review_columns(df: pd.DataFrame) -> pd.DataFrame:
+    review_cols = ["GroupReviewed", "Decision", "DecisionNotes", "ReviewedBy"]
+    for col in review_cols:
+        if col not in df.columns:
+            df[col] = ""
+    return df
+
+
 def load_category_path_map(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
@@ -4144,6 +4152,7 @@ def write_excels(
     dups_df = drop_duplicate_header_rows(dups_df)
     if articles_df is not None:
         articles_df = drop_duplicate_header_rows(articles_df)
+    dups_df = ensure_duplicate_review_columns(dups_df)
     if not dups_df.empty:
         if "DupScore" in dups_df.columns:
             dups_df["DupScore"] = pd.to_numeric(dups_df["DupScore"], errors="coerce").fillna(0.0)
@@ -4168,6 +4177,40 @@ def write_excels(
     with pd.ExcelWriter(peers_path, engine="openpyxl") as writer:
         docs_df.to_excel(writer, index=False, sheet_name="Documents")
         dups_df.to_excel(writer, index=False, sheet_name="Duplicates")
+        pd.DataFrame(
+            [
+                {
+                    "Field": "GroupReviewed",
+                    "Allowed Values": "Reviewed",
+                    "Meaning": "Mark one row in a review group as Reviewed; all rows in the same ReviewGroupID will be highlighted.",
+                },
+                {
+                    "Field": "GroupReviewed",
+                    "Allowed Values": "Unfinished",
+                    "Meaning": "Use when a duplicate group has been opened but is not finalized yet.",
+                },
+                {
+                    "Field": "Decision",
+                    "Allowed Values": "Primary",
+                    "Meaning": "Chosen file to keep as the main migration candidate in a duplicate group.",
+                },
+                {
+                    "Field": "Decision",
+                    "Allowed Values": "Keep",
+                    "Meaning": "Keep this file as well.",
+                },
+                {
+                    "Field": "Decision",
+                    "Allowed Values": "Drop",
+                    "Meaning": "Do not migrate this file.",
+                },
+                {
+                    "Field": "Decision",
+                    "Allowed Values": "Needs Review",
+                    "Meaning": "Still unresolved.",
+                },
+            ]
+        ).to_excel(writer, index=False, sheet_name="duplicate_review_legend")
         if articles_enabled and articles_df is not None:
             articles_df.to_excel(writer, index=False, sheet_name="Articles")
             articles_sheet_status = "written"
@@ -4203,18 +4246,30 @@ def write_excels(
     full_text_path = write_full_text_archive(out_dir, app_name, full_text_rows, append_excel)
     write_full_text_legacy_structure_note(out_dir)
 
-    # Apply formatting: wrap summaries and widen columns
+    # Apply formatting: wrap summaries, add reviewer UX, and widen columns
     try:
         from openpyxl import load_workbook
-        from openpyxl.styles import Alignment
-        from openpyxl.worksheet.table import Table, TableStyleInfo
+        from openpyxl.styles import Alignment, Font, PatternFill
+        from openpyxl.formatting.rule import FormulaRule
+        from openpyxl.utils import get_column_letter
+        from openpyxl.worksheet.datavalidation import DataValidation
 
         def format_sheet(path: Path, sheet_name: str, wrap_cols: List[str]) -> None:
             wb = load_workbook(path)
             ws = wb[sheet_name]
             header = {cell.value: cell.column for cell in ws[1]}
             wrap = Alignment(wrap_text=True, vertical="top")
+            center = Alignment(horizontal="center", vertical="top")
+            dark_fill = PatternFill(fill_type="solid", fgColor="1F2937")
+            review_fill = PatternFill(fill_type="solid", fgColor="0F766E")
+            white_bold = Font(color="FFFFFF", bold=True)
 
+            # Style and preserve the visible header/filter/freeze UX without Excel table objects.
+            for cell in ws[1]:
+                cell.fill = dark_fill
+                cell.font = white_bold
+                cell.alignment = wrap
+            ws.row_dimensions[1].height = 28
             for col_name in wrap_cols:
                 col_idx = header.get(col_name)
                 if not col_idx:
@@ -4226,26 +4281,102 @@ def write_excels(
                 col_letter = ws.cell(row=1, column=col_idx).column_letter
                 ws.column_dimensions[col_letter].width = 60
 
-            # Apply table style
+            # Apply filter/freeze only; avoid Table objects because they trigger repair warnings after rewrites.
             max_row = ws.max_row
             max_col = ws.max_column
             if max_row >= 2 and max_col >= 1:
                 ref = f"A1:{ws.cell(row=max_row, column=max_col).coordinate}"
-                table = Table(displayName=f"{sheet_name}Table", ref=ref)
-                style = TableStyleInfo(
-                    name="TableStyleMedium1",
-                    showFirstColumn=False,
-                    showLastColumn=False,
-                    showRowStripes=True,
-                    showColumnStripes=False,
-                )
-                table.tableStyleInfo = style
-                ws.add_table(table)
+                ws.auto_filter.ref = ref
+                ws.freeze_panes = "A2"
+
+            if sheet_name == "Duplicates":
+                review_headers = {
+                    "GroupReviewed": 16,
+                    "Decision": 18,
+                    "DecisionNotes": 36,
+                    "ReviewedBy": 18,
+                }
+                for col_name, width in review_headers.items():
+                    col_idx = header.get(col_name)
+                    if not col_idx:
+                        continue
+                    col_letter = get_column_letter(col_idx)
+                    ws.column_dimensions[col_letter].width = width
+                    ws.cell(row=1, column=col_idx).fill = review_fill
+                    for row in ws.iter_rows(min_row=2, min_col=col_idx, max_col=col_idx):
+                        for cell in row:
+                            cell.alignment = center if col_name in ("GroupReviewed", "Decision") else wrap
+
+                if max_row >= 2:
+                    group_col = get_column_letter(header["GroupReviewed"])
+                    decision_col = get_column_letter(header["Decision"])
+                    reviewed_dv = DataValidation(type="list", formula1='"Reviewed,Unfinished"', allow_blank=True)
+                    decision_dv = DataValidation(
+                        type="list",
+                        formula1='"Primary,Keep,Drop,Needs Review"',
+                        allow_blank=True,
+                    )
+                    ws.add_data_validation(reviewed_dv)
+                    ws.add_data_validation(decision_dv)
+                    reviewed_dv.add(f"{group_col}2:{group_col}{max_row}")
+                    decision_dv.add(f"{decision_col}2:{decision_col}{max_row}")
+
+                    row_fill = PatternFill(fill_type="solid", fgColor="E2F0D9")
+                    primary_fill = PatternFill(fill_type="solid", fgColor="89B36D")
+                    keep_fill = PatternFill(fill_type="solid", fgColor="F3E7D2")
+                    drop_fill = PatternFill(fill_type="solid", fgColor="E7D7F4")
+                    needs_fill = PatternFill(fill_type="solid", fgColor="DCEAF7")
+                    primary_font = Font(color="1F3B08", bold=True)
+                    keep_font = Font(color="5B4B2A", bold=True)
+                    drop_font = Font(color="5A2740", bold=True)
+                    needs_font = Font(color="234A68", bold=True)
+                    row_ref = f"A2:{ws.cell(row=max_row, column=max_col).coordinate}"
+                    decision_ref = f"{decision_col}2:{decision_col}{max_row}"
+                    reviewed_formula = (
+                        f'COUNTIFS($A$2:$A${max_row},$A2,${group_col}$2:${group_col}${max_row},"Reviewed")>0'
+                    )
+                    ws.conditional_formatting.add(
+                        row_ref,
+                        FormulaRule(formula=[reviewed_formula], fill=row_fill),
+                    )
+                    ws.conditional_formatting.add(
+                        decision_ref,
+                        FormulaRule(formula=[f'${decision_col}2="Primary"'], fill=primary_fill, font=primary_font),
+                    )
+                    ws.conditional_formatting.add(
+                        decision_ref,
+                        FormulaRule(formula=[f'${decision_col}2="Keep"'], fill=keep_fill, font=keep_font),
+                    )
+                    ws.conditional_formatting.add(
+                        decision_ref,
+                        FormulaRule(formula=[f'${decision_col}2="Drop"'], fill=drop_fill, font=drop_font),
+                    )
+                    ws.conditional_formatting.add(
+                        decision_ref,
+                        FormulaRule(formula=[f'${decision_col}2="Needs Review"'], fill=needs_fill, font=needs_font),
+                    )
+
+            if sheet_name == "duplicate_review_legend":
+                for cell in ws[1]:
+                    cell.fill = dark_fill
+                    cell.font = white_bold
+                    cell.alignment = wrap
+                ws.row_dimensions[1].height = 28
+                widths = {"A": 20, "B": 24, "C": 96}
+                for col_letter, width in widths.items():
+                    ws.column_dimensions[col_letter].width = width
+                for row in ws.iter_rows(min_row=2):
+                    for cell in row:
+                        cell.alignment = wrap
+                if max_row >= 2:
+                    ws.auto_filter.ref = f"A1:C{max_row}"
+                    ws.freeze_panes = "A2"
 
             wb.save(path)
 
         format_sheet(peers_path, "Documents", ["LongSummary", "ShortSummary", "FilePath"])
         format_sheet(peers_path, "Duplicates", ["FilePath"])
+        format_sheet(peers_path, "duplicate_review_legend", ["Meaning"])
         if articles_sheet_status in ("written", "preserved"):
             format_sheet(peers_path, "Articles", ["FilePath", "ArticleTitle", "ArticleSummary"])
         format_sheet(import_path, "import", ["Path", "Title", "Content", "Summary", "Tags", "Attachments", "ArticleType"])
