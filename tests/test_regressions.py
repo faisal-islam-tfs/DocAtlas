@@ -393,6 +393,17 @@ class DocAtlasRegressionTests(unittest.TestCase):
         self.assertIn("Cell Isolation", path_map["Cell Culture"])
         self.assertIn("Gibco manufacturing and packaging docs", path_map["Cell Culture"])
 
+    def test_cell_analysis_config_includes_hcs_and_tali(self) -> None:
+        with open("applications.json", encoding="utf-8") as fh:
+            app_config = json.load(fh)["applications"]
+        with open("category_path_map.json", encoding="utf-8") as fh:
+            path_map = json.load(fh)
+
+        self.assertIn("HCS", app_config["Cell Analysis"])
+        self.assertIn("Tali", app_config["Cell Analysis"])
+        self.assertIn("HCS", path_map["Cell Analysis"])
+        self.assertIn("Tali", path_map["Cell Analysis"])
+
     def test_infer_category_uses_path_hints_for_gibco_docs(self) -> None:
         category = docatlas._infer_category_from_text(
             "Packaging specification and manufacturing label change guidance for Gibco product lines.",
@@ -419,6 +430,33 @@ class DocAtlasRegressionTests(unittest.TestCase):
             file_path="Extracellular matrices and 3D cultures/Basement_Membrane_Matrix_Guide.pdf",
         )
         self.assertEqual(category, "ECM and 3D Culture")
+
+    def test_infer_category_maps_software_celleste_folder_to_celleste_category(self) -> None:
+        category = docatlas._infer_category_from_text(
+            "Release notes and image analysis software training materials for EVOS imaging workflows.",
+            ["Celleste Image Analysis Software", "Other"],
+            file_name="Celleste_Release_Notes.pdf",
+            file_path="CELL ANALYSIS INSTRUMENTS and SOFTWARE/SOFTWARE - CELLESTE/CA EVOS Imaging Software Celleste - Release Notes/Celleste_Release_Notes.pdf",
+        )
+        self.assertEqual(category, "Celleste Image Analysis Software")
+
+    def test_infer_category_maps_hcs_folder_to_hcs(self) -> None:
+        category = docatlas._infer_category_from_text(
+            "Application note for high content screening assay setup and analysis workflows.",
+            ["HCS", "Other"],
+            file_name="HCS_Application_Note.pdf",
+            file_path="CELL ANALYSIS INSTRUMENTS and SOFTWARE/INSTRUMENT - HCS/HCS - Application and Product Notes/HCS_Application_Note.pdf",
+        )
+        self.assertEqual(category, "HCS")
+
+    def test_infer_category_maps_tali_folder_to_tali(self) -> None:
+        category = docatlas._infer_category_from_text(
+            "User guide for the image-based cytometer with setup, counting, and viability workflows.",
+            ["Tali", "Other"],
+            file_name="Tali_User_Guide.pdf",
+            file_path="CELL ANALYSIS INSTRUMENTS and SOFTWARE/INSTRUMENT - TALI/Tali User Guides/Tali_User_Guide.pdf",
+        )
+        self.assertEqual(category, "Tali")
 
     def test_list_files_discovers_zip_members_with_logical_paths(self) -> None:
         input_dir = self.make_tempdir()

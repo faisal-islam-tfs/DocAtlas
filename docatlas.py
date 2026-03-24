@@ -239,6 +239,11 @@ CATEGORY_HINT_PHRASES: Dict[str, List[Tuple[str, float]]] = {
         ("cardiomyocyte isolation", 4.0),
         ("neuron isolation", 4.0),
     ],
+    "celleste image analysis software": [
+        ("celleste", 5.0),
+        ("celleste image analysis software", 4.6),
+        ("evos imaging software", 3.2),
+    ],
     "assay design": [
         ("assay design", 0.8),
         ("design tool", 2.5),
@@ -332,6 +337,11 @@ CATEGORY_HINT_PHRASES: Dict[str, List[Tuple[str, float]]] = {
         ("threshold", 1.5),
         ("baseline", 1.4),
         ("normalization", 1.6),
+    ],
+    "hcs": [
+        ("hcs", 4.6),
+        ("high content screening", 5.0),
+        ("high content analysis", 3.8),
     ],
     "liquid cell culture": [
         ("liquid media", 4.2),
@@ -449,6 +459,14 @@ CATEGORY_HINT_PHRASES: Dict[str, List[Tuple[str, float]]] = {
         ("spectrophotometer", 1.8),
         ("scivault", 1.6),
     ],
+    "spectra": [
+        ("spectra", 4.6),
+        ("spectral", 2.2),
+    ],
+    "tali": [
+        ("tali", 4.8),
+        ("tali image based cytometer", 4.4),
+    ],
     "protein expression": [
         ("protein expression", 4.6),
         ("bluegrass", 4.0),
@@ -553,6 +571,34 @@ CATEGORY_PATH_COMPONENT_HINTS: Dict[str, List[Tuple[str, float]]] = {
         ("cell culture reagents antibiotics and supplements", 2.8),
         ("cell isolation and dissociation reagents", 4.8),
     ],
+    "celleste image analysis software": [
+        ("software celleste", 5.0),
+        ("celleste", 4.6),
+        ("ca evos imaging software celleste", 4.8),
+    ],
+    "ca instrument accessories and reagents": [
+        ("cell analysis instrument accessories and reagents", 5.0),
+    ],
+    "ca instrument calibration tools and standards": [
+        ("cell analysis instrument calibration tools and standards", 5.0),
+    ],
+    "ca microplate readers and washers": [
+        ("instrument microplate readers and washers", 5.0),
+        ("cell analysis microplate readers", 4.6),
+        ("cell analysis microplate washers", 4.6),
+    ],
+    "countess 1": [
+        ("instrument countess", 2.8),
+        ("countess 1", 5.0),
+    ],
+    "countess 2 and 2fl": [
+        ("instrument countess", 2.8),
+        ("countess 2 and 2fl", 5.0),
+    ],
+    "countess 3 and 3fl": [
+        ("instrument countess", 2.8),
+        ("countess 3 and 3fl", 5.0),
+    ],
     "custom dna oligos": [
         ("custom dna oligos", 4.5),
         ("oligo files", 4.0),
@@ -582,8 +628,27 @@ CATEGORY_PATH_COMPONENT_HINTS: Dict[str, List[Tuple[str, float]]] = {
     "ecm and 3d culture": [
         ("extracellular matrices and 3d cultures", 5.0),
     ],
+    "evos floid": [
+        ("instrument evos", 2.8),
+        ("cell analysis instrument evos floid", 5.0),
+        ("evos floid", 4.6),
+    ],
+    "evos 5000": [
+        ("instrument evos", 2.8),
+        ("cell analysis instrument evos m5000", 5.0),
+        ("evos m5000", 4.6),
+    ],
+    "evos1000": [
+        ("instrument evos", 2.8),
+        ("cell analysis instrument evos s1000", 5.0),
+        ("evos s1000", 4.6),
+    ],
     "gibco manufacturing and packaging docs": [
         ("gibco manufacturing and packaging docs", 5.0),
+    ],
+    "hcs": [
+        ("instrument hcs", 5.0),
+        ("hcs", 4.6),
     ],
     "liquid cell culture": [
         ("cell culture media", 2.2),
@@ -623,10 +688,23 @@ CATEGORY_PATH_COMPONENT_HINTS: Dict[str, List[Tuple[str, float]]] = {
         ("qubit and quant-it", 4.6),
         ("qubit", 4.0),
     ],
+    "spectra": [
+        ("ca reagents kits spectra", 5.0),
+        ("ca spectra", 4.6),
+        ("spectra", 4.0),
+    ],
+    "microspheres": [
+        ("ca polystyrene microspheres", 5.0),
+        ("microspheres", 4.4),
+    ],
     "thermal cycler plastics and reagents": [
         ("pcr plastics", 4.8),
         ("microamp", 4.0),
         ("optical adhesive", 3.4),
+    ],
+    "tali": [
+        ("instrument tali", 5.0),
+        ("tali", 4.6),
     ],
     "transfection": [
         ("transfection", 4.4),
