@@ -30,7 +30,10 @@ tmux new-session -d -s docatlas_<app_slug>_<mmdd> "bash -ic 'cd ~/DocAtlas && so
 6. Monitor as needed:
    - `tmux attach -t docatlas_<app_slug>_<mmdd>`
    - Telegram bot commands:
+     - `help`
      - `status`
+     - `estimate`
+     - `latest`
      - `tail`
      - `summary`
      - `errors`
