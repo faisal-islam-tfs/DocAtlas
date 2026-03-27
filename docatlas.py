@@ -476,6 +476,30 @@ CATEGORY_HINT_PHRASES: Dict[str, List[Tuple[str, float]]] = {
         ("chlamydomonas", 2.4),
         ("synechococcus", 2.4),
     ],
+    "protein affinity purification": [
+        ("protein affinity purification", 4.8),
+        ("affinity purification", 3.8),
+        ("protein a", 2.4),
+        ("protein g", 2.4),
+        ("sepharose", 2.2),
+        ("agarose", 1.8),
+    ],
+    "protein assays": [
+        ("protein assay", 4.6),
+        ("protein assays", 4.6),
+        ("bca", 2.8),
+        ("bradford", 2.4),
+        ("660nm", 2.4),
+        ("quant it protein", 2.8),
+        ("quant-it protein", 2.8),
+    ],
+    "western blotting": [
+        ("western blot", 4.8),
+        ("western blotting", 4.8),
+        ("immunoblot", 3.6),
+        ("ecl", 2.0),
+        ("blot", 1.4),
+    ],
     "water": [
         ("water purification", 5.0),
         ("water purification system", 5.0),
@@ -682,6 +706,74 @@ CATEGORY_PATH_COMPONENT_HINTS: Dict[str, List[Tuple[str, float]]] = {
         ("protein expression", 4.8),
         ("algae", 2.6),
         ("bluegrass", 4.0),
+    ],
+    "protein affinity purification": [
+        ("protein affinity purification", 5.0),
+    ],
+    "protein assays": [
+        ("protein assays", 5.0),
+        ("protein assay", 4.6),
+    ],
+    "western blotting": [
+        ("western blotting", 5.0),
+        ("western blot", 4.8),
+    ],
+    "antibodies - proteins": [
+        ("antibodies and immunoassays antibodies", 5.0),
+        ("antibodies and immunoassays antibodies primary", 5.0),
+        ("primary antibodies education and training", 4.4),
+        ("primary antibodies internal faqs", 4.2),
+        ("secondary antibodies documentation confidential", 4.2),
+        ("antibodies and recombinant proteins", 2.8),
+    ],
+    "pepro gmp recombinant proteins": [
+        ("pepro gmp recombinant proteins", 5.0),
+    ],
+    "recombinant proteins": [
+        ("recombinant proteins", 4.8),
+        ("antibodies and recombinant proteins", 2.4),
+    ],
+    "epigenetics chip emsa and remsa": [
+        ("epigenetics", 5.0),
+    ],
+    "ibright and my ecl": [
+        ("ibright and myecl", 5.0),
+        ("ibright", 3.8),
+        ("myecl", 3.8),
+    ],
+    "bait ip": [
+        ("education and training - bait", 5.0),
+        ("bait", 2.6),
+    ],
+    "target ip": [
+        ("application and product notes - target", 4.8),
+        ("documentation - target", 4.8),
+        ("education and training - target", 4.8),
+        ("troubleshooting - target", 5.0),
+        ("target", 2.6),
+    ],
+    "ms sample prep": [
+        ("mass spectrometry reagents", 2.8),
+        ("ms sample prep", 5.0),
+    ],
+    "ms sample quantitation": [
+        ("mass spectrometry reagents", 2.8),
+        ("ms sample quantitation", 5.0),
+    ],
+    "ms standards": [
+        ("mass spectrometry reagents", 2.8),
+        ("ms standards", 5.0),
+    ],
+    "beads - proteins": [
+        ("magnetic beads", 5.0),
+    ],
+    "protein labeling xlinking and modification": [
+        ("protein labeling xlinking and modification", 5.0),
+        ("protein labeling xlinking modification", 5.0),
+    ],
+    "singleplex and multiplex protein immunoassays": [
+        ("singleplex and multiplex immunoassays", 5.0),
+        ("singleplex and multiplex protein immunoassays", 5.0),
     ],
     "qubit and quant-it": [
         ("qubit and quant it", 4.6),

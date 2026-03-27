@@ -414,15 +414,18 @@
     "MS Sample Prep": "/Life_Sciences/Life_Science_Applications/Protein_Biology/Mass_Spectrometry_Reagents/MS_Sample_Prep",
     "MS Sample Quantitation": "/Life_Sciences/Life_Science_Applications/Protein_Biology/Mass_Spectrometry_Reagents/MS_Sample_Quantitation",
     "MS Standards": "/Life_Sciences/Life_Science_Applications/Protein_Biology/Mass_Spectrometry_Reagents/MS_Standards",
+    "Protein Affinity Purification": "/Life_Sciences/Life_Science_Applications/Protein_Biology/Protein_Affinity_Purification",
     "POROS and CaptureSelect": "/Life_Sciences/Life_Science_Applications/Protein_Biology/POROS_and_CaptureSelect",
     "Proteins Sample Prep": "/Life_Sciences/Life_Science_Applications/Protein_Biology/Proteins_Sample_Prep",
     "Beads - Proteins": "/Life_Sciences/Life_Science_Applications/Protein_Biology/Protein_Affinity_Purification/Beads_-_Proteins",
     "Resins": "/Life_Sciences/Life_Science_Applications/Protein_Biology/Protein_Affinity_Purification/Resins",
+    "Protein Assays": "/Life_Sciences/Life_Science_Applications/Protein_Biology/Protein_Assays",
     "Colorimetric Protein Assays": "/Life_Sciences/Life_Science_Applications/Protein_Biology/Protein_Assays/Colorimetric_Protein_Assays",
     "Fluorescent Protein Assays": "/Life_Sciences/Life_Science_Applications/Protein_Biology/Protein_Assays/Fluorescent_Protein_Assays",
     "Protein Labeling Xlinking and Modification": "/Life_Sciences/Life_Science_Applications/Protein_Biology/Protein_Labeling_Xlinking_and_Modification",
     "Protein Stains and Standards": "/Life_Sciences/Life_Science_Applications/Protein_Biology/Protein_Stains_and_Standards",
-    "Singleplex and Multiplex Protein Immunoassays": "/Life_Sciences/Life_Science_Applications/Protein_Biology/Singleplex_and_Multiplex_Protein_Immunoassays"
+    "Singleplex and Multiplex Protein Immunoassays": "/Life_Sciences/Life_Science_Applications/Protein_Biology/Singleplex_and_Multiplex_Protein_Immunoassays",
+    "Western Blotting": "/Life_Sciences/Life_Science_Applications/Protein_Biology/Western_Blotting"
   },
   "Sample Prep": {
     "Mol Bio Sample Prep": "/Life_Sciences/Life_Science_Applications/Sample_Prep/Mol_Bio_Sample_Prep",

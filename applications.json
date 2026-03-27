@@ -415,15 +415,18 @@
       "MS Sample Prep",
       "MS Sample Quantitation",
       "MS Standards",
+      "Protein Affinity Purification",
       "POROS and CaptureSelect",
       "Proteins Sample Prep",
       "Beads - Proteins",
       "Resins",
+      "Protein Assays",
       "Colorimetric Protein Assays",
       "Fluorescent Protein Assays",
       "Protein Labeling Xlinking and Modification",
       "Protein Stains and Standards",
-      "Singleplex and Multiplex Protein Immunoassays"
+      "Singleplex and Multiplex Protein Immunoassays",
+      "Western Blotting"
     ],
     "Sample Prep": [
       "Mol Bio Sample Prep",

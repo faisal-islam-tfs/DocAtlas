@@ -404,6 +404,19 @@ class DocAtlasRegressionTests(unittest.TestCase):
         self.assertIn("HCS", path_map["Cell Analysis"])
         self.assertIn("Tali", path_map["Cell Analysis"])
 
+    def test_protein_biology_config_includes_folder_priority_categories(self) -> None:
+        with open("applications.json", encoding="utf-8") as fh:
+            app_config = json.load(fh)["applications"]
+        with open("category_path_map.json", encoding="utf-8") as fh:
+            path_map = json.load(fh)
+
+        self.assertIn("Protein Affinity Purification", app_config["Protein Biology"])
+        self.assertIn("Protein Assays", app_config["Protein Biology"])
+        self.assertIn("Western Blotting", app_config["Protein Biology"])
+        self.assertIn("Protein Affinity Purification", path_map["Protein Biology"])
+        self.assertIn("Protein Assays", path_map["Protein Biology"])
+        self.assertIn("Western Blotting", path_map["Protein Biology"])
+
     def test_infer_category_uses_path_hints_for_gibco_docs(self) -> None:
         category = docatlas._infer_category_from_text(
             "Packaging specification and manufacturing label change guidance for Gibco product lines.",
@@ -457,6 +470,42 @@ class DocAtlasRegressionTests(unittest.TestCase):
             file_path="CELL ANALYSIS INSTRUMENTS and SOFTWARE/INSTRUMENT - TALI/Tali User Guides/Tali_User_Guide.pdf",
         )
         self.assertEqual(category, "Tali")
+
+    def test_infer_category_maps_protein_alias_folders(self) -> None:
+        category = docatlas._infer_category_from_text(
+            "Troubleshooting and imaging guide for chemiluminescent blot detection.",
+            ["iBright and my ECL", "Western Blotting", "Other"],
+            file_name="iBright_and_myECL_Troubleshooting.pdf",
+            file_path="iBright and myECL/Troubleshooting/iBright_and_myECL_Troubleshooting.pdf",
+        )
+        self.assertEqual(category, "iBright and my ECL")
+
+    def test_infer_category_maps_protein_broad_parent_folders(self) -> None:
+        category = docatlas._infer_category_from_text(
+            "Application note for protein A and protein G agarose affinity purification workflows.",
+            ["Protein Affinity Purification", "POROS and CaptureSelect", "Resins", "Other"],
+            file_name="Protein_G_Agarose_Workflow.pdf",
+            file_path="Protein Affinity Purification/Application and Product Notes/Protein_G_Agarose_Workflow.pdf",
+        )
+        self.assertEqual(category, "Protein Affinity Purification")
+
+    def test_infer_category_maps_protein_assays_folder(self) -> None:
+        category = docatlas._infer_category_from_text(
+            "Rapid Gold BCA protocol for NanoDrop protein quantification.",
+            ["Protein Assays", "Colorimetric Protein Assays", "Fluorescent Protein Assays", "Other"],
+            file_name="nanodrop-one-onec-rapid-gold-bca-protocol-en.pdf",
+            file_path="Protein Assays/Application and Product Notes/nanodrop-one-onec-rapid-gold-bca-protocol-en.pdf",
+        )
+        self.assertEqual(category, "Protein Assays")
+
+    def test_infer_category_maps_western_blotting_folder(self) -> None:
+        category = docatlas._infer_category_from_text(
+            "Western blot troubleshooting guide for membrane blocking and detection.",
+            ["Western Blotting", "Other"],
+            file_name="Western_Blot_Troubleshooting.pdf",
+            file_path="Western Blotting/Troubleshooting/Western_Blot_Troubleshooting.pdf",
+        )
+        self.assertEqual(category, "Western Blotting")
 
     def test_list_files_discovers_zip_members_with_logical_paths(self) -> None:
         input_dir = self.make_tempdir()
