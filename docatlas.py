@@ -1709,6 +1709,34 @@ def save_last_run_stats(out_dir: Path, stats: Dict[str, Any]) -> None:
         pass
 
 
+def find_latest_completed_run_stats(out_dir: Path) -> Optional[Dict[str, Any]]:
+    baseline = load_last_run_stats(out_dir)
+    if baseline and baseline.get("processed_files", 0) > 0:
+        return baseline
+
+    charter_dir = out_dir.parent
+    if not charter_dir.exists() or not charter_dir.is_dir():
+        return None
+
+    candidates: List[Tuple[float, Dict[str, Any]]] = []
+    for run_dir in charter_dir.iterdir():
+        if not run_dir.is_dir() or run_dir == out_dir:
+            continue
+        stats = load_last_run_stats(run_dir)
+        if not stats or stats.get("processed_files", 0) <= 0:
+            continue
+        stats_path = run_dir / LAST_RUN_STATS_FILENAME
+        try:
+            stamp = stats_path.stat().st_mtime
+        except OSError:
+            stamp = 0.0
+        candidates.append((stamp, stats))
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
 def format_duration(seconds: float) -> str:
     seconds = max(0, int(seconds))
     minutes = seconds / 60
@@ -1730,7 +1758,7 @@ def quick_estimate_runtime(
     embeddings_source: str,
     chat_deployment: str,
 ) -> Tuple[Optional[float], str, bool]:
-    baseline = load_last_run_stats(output_dir)
+    baseline = find_latest_completed_run_stats(output_dir)
     count = input_stats.get("count", 0)
     total_mb = input_stats.get("total_size_mb", 0.0)
     if count <= 0:

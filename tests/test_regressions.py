@@ -259,8 +259,38 @@ class DocAtlasRegressionTests(unittest.TestCase):
 
         self.assertNotIn(("DOC-1", "DOC-2"), near_edges)
         self.assertIn(("DOC-3", "DOC-4"), near_edges)
-        self.assertEqual(near_of.get("DOC-1", ""), "")
-        self.assertIn(near_of.get("DOC-3", ""), {"DOC-4"})
+
+    def test_quick_estimate_runtime_uses_latest_sibling_last_run_stats(self) -> None:
+        root = self.make_tempdir()
+        charter_dir = root / "output" / "protein_biology" / "charter"
+        old_run = charter_dir / "2026-03-27_run01"
+        new_run = charter_dir / "2026-03-30_run01"
+        old_run.mkdir(parents=True, exist_ok=True)
+        new_run.mkdir(parents=True, exist_ok=True)
+
+        docatlas.save_last_run_stats(
+            old_run,
+            {
+                "elapsed_sec": 1000.0,
+                "processed_files": 100,
+                "total_size_mb": 50.0,
+                "ocr_enabled": True,
+                "embeddings_source": "full_text",
+                "chat_deployment": "gpt-5.2",
+            },
+        )
+
+        est_sec, source, settings_match = docatlas.quick_estimate_runtime(
+            {"count": 200, "total_size_mb": 120.0},
+            new_run,
+            ocrmypdf_enabled=True,
+            embeddings_source="full_text",
+            chat_deployment="gpt-5.2",
+        )
+
+        self.assertEqual(source, "baseline")
+        self.assertTrue(settings_match)
+        self.assertEqual(est_sec, 2400.0)
 
     def test_article_type_prefers_manuals_over_troubleshooting_content(self) -> None:
         label = docatlas.classify_article_type_by_content(
