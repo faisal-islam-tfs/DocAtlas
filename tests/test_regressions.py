@@ -75,6 +75,7 @@ def sample_doc(
         category=category,
         tags=["tag1", "tag2"],
         short_summary="Test summary",
+        normalized_title="Test Product A12345 Technical Overview",
         long_summary="Longer test summary for workbook output.",
         word_count=25,
         char_count=180,
@@ -341,7 +342,18 @@ class DocAtlasRegressionTests(unittest.TestCase):
 
         import_df = pd.read_excel(out_dir / "TestApp__docatlas_import.xlsx", sheet_name="import")
         self.assertEqual(len(import_df), 1)
-        self.assertEqual(str(import_df.loc[0, "Title"]), good_doc.short_summary)
+        self.assertEqual(str(import_df.loc[0, "Title"]), good_doc.normalized_title)
+        self.assertEqual(str(import_df.loc[0, "Attachments"]), "./a.xlsx")
+
+    def test_attachment_path_for_doc_uses_actual_filename(self) -> None:
+        self.assertEqual(
+            docatlas.attachment_path_for_doc("actual_file.pdf", "nested/ignored_name.docx"),
+            "./actual_file.pdf",
+        )
+        self.assertEqual(
+            docatlas.attachment_path_for_doc("", "folder/sub/backup.xlsx"),
+            "./backup.xlsx",
+        )
 
     def test_large_doc_summary_guard_uses_local_fallback(self) -> None:
         huge_text = ("important assay content " * 20000).strip()
@@ -357,6 +369,39 @@ class DocAtlasRegressionTests(unittest.TestCase):
         self.assertEqual(flag, "summary_truncated_large_doc")
         self.assertTrue(summary["long_summary"])
         self.assertEqual(summary["category"], "Other")
+        self.assertTrue(summary["normalized_title"])
+
+    def test_normalize_import_title_text_strips_punctuation_and_questions(self) -> None:
+        title = docatlas.normalize_import_title_text(
+            "How does Expi293™ (A12345) improve yields?",
+            file_name="Expi293_A12345.pdf",
+        )
+        self.assertEqual(title, "Expi293 A12345 Improve Yields")
+        plus_title = docatlas.normalize_import_title_text(
+            "EfficientFeed A+ B+ C+ stability guidance",
+            file_name="efficientfeed.pdf",
+        )
+        self.assertEqual(plus_title, "EfficientFeed A Plus B Plus C Plus Stability Guidance")
+
+    def test_summarize_with_model_normalizes_generated_title(self) -> None:
+        payload = json.dumps(
+            {
+                "long_summary": "Long summary.",
+                "short_summary": "Short summary.",
+                "normalized_title": "Can Expi293™ A12345 improve yields?",
+                "category": "Other",
+                "tags": ["yield"],
+            }
+        )
+        with patch("docatlas.call_azure_chat", return_value=payload):
+            summary = docatlas.summarize_with_model(
+                dummy_cfg(),
+                "document text",
+                ["Other"],
+                file_name="Expi293_A12345.pdf",
+                file_path="Cells/Expi293_A12345.pdf",
+            )
+        self.assertEqual(summary["normalized_title"], "Expi293 A12345 Improve Yields")
 
     def test_infer_category_uses_path_hints_for_nanodrop(self) -> None:
         category = docatlas._infer_category_from_text(

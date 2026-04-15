@@ -138,6 +138,7 @@ FALLBACK_MIN_SENTENCE_CHARS = 35
 FALLBACK_MAX_TOTAL_CHARS_DOC_LONG = 2400
 FALLBACK_MAX_TOTAL_CHARS_DOC_SHORT = 420
 FALLBACK_MAX_TOTAL_CHARS_ARTICLE = 3200
+MAX_TITLE_INPUT_CHARS = 24000
 MAX_DOC_SUMMARY_INPUT_CHARS = 180000
 MAX_DOC_SUMMARY_CHUNKS = 12
 MAX_DOC_SUMMARY_FALLBACK_SOURCE_CHARS = 140000
@@ -216,6 +217,8 @@ SUMMARY_STOPWORDS = {
     "over",
     "under",
 }
+TITLE_SMALL_WORDS = {"a", "an", "and", "as", "at", "by", "for", "from", "if", "in", "of", "on", "or", "the", "to", "vs", "with"}
+TITLE_QUESTION_WORDS = {"what", "how", "can", "does", "is", "are", "when", "why", "where", "should", "could", "would"}
 
 # Deterministic category hints tuned for qPCR-style corpora.
 # Keys are normalized category names.
@@ -922,6 +925,7 @@ class DocRecord:
     category: str
     tags: List[str]
     short_summary: str
+    normalized_title: str
     long_summary: str
     word_count: int
     char_count: int
@@ -1982,6 +1986,115 @@ def _extract_top_tags(text: str, max_tags: int = MAX_TAGS) -> List[str]:
     return [t for t, _n in ranked[:max_tags]]
 
 
+def _title_source_excerpt(text: str) -> str:
+    text = (text or "").strip()
+    if len(text) <= MAX_TITLE_INPUT_CHARS:
+        return text
+    head = int(MAX_TITLE_INPUT_CHARS * 0.7)
+    tail = MAX_TITLE_INPUT_CHARS - head
+    return f"{text[:head]}\n\n[... truncated for title generation ...]\n\n{text[-tail:]}"
+
+
+def _apply_standard_title_capitalization(text: str) -> str:
+    out: List[str] = []
+    for idx, token in enumerate(text.split()):
+        if len(token) == 1 and token.isalpha():
+            out.append(token.upper())
+            continue
+        if any(ch.islower() for ch in token) and any(ch.isupper() for ch in token[1:]):
+            out.append(token)
+            continue
+        if re.fullmatch(r"[A-Z0-9]{2,}", token):
+            out.append(token)
+            continue
+        lower = token.lower()
+        if idx > 0 and lower in TITLE_SMALL_WORDS:
+            out.append(lower)
+        else:
+            out.append(lower.capitalize())
+    return " ".join(out)
+
+
+def normalize_import_title_text(text: str, file_name: str = "") -> str:
+    text = str(text or "").strip()
+    if not text:
+        text = Path(str(file_name or "Document")).stem
+    text = text.replace("+", " Plus ")
+    text = re.sub(r"\b([A-Za-z])plus\b", r"\1 Plus", text, flags=re.I)
+    text = re.sub(r"[?!.:,;()\[\]{}<>/\\|@#$%^&*_+=~`\"'’“”–—-]+", " ", text)
+    text = text.replace("™", "").replace("®", "").replace("©", "")
+    text = re.sub(r"\b(?:what|how|can|does|is|are|when|why|where|should|could|would)\b", " ", text, flags=re.I)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"[^0-9A-Za-z ]+", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return _apply_standard_title_capitalization(text)
+
+
+def build_fallback_import_title(
+    file_name: str,
+    file_path: str,
+    short_summary: str,
+    long_summary: str,
+) -> str:
+    stem = Path(str(file_name or "Document")).stem
+    stem = re.sub(r"^(CF|Confidential|Internal)\s*-\s*", "", stem, flags=re.I)
+    stem = re.sub(r"\bfinal\b", " ", stem, flags=re.I)
+    stem = re.sub(r"\s+", " ", stem).strip()
+
+    catalog = ""
+    source_text = " ".join([stem, short_summary or "", long_summary or "", file_path or ""])
+    m = re.search(r"\b([A-Z]?\d{5,8}[A-Z0-9]*)\b", source_text)
+    if m:
+        catalog = m.group(1)
+
+    product_tokens: List[str] = []
+    for token in re.split(r"\s+", stem):
+        token_clean = normalize_import_title_text(token)
+        if not token_clean:
+            continue
+        if token_clean.lower() in {"faq", "memo", "guide", "handbook", "protocol", "report", "summary", "training", "letter", "sheet", "study"}:
+            break
+        if re.fullmatch(r"\d{1,4}", token_clean):
+            if product_tokens:
+                break
+            continue
+        if catalog and token_clean == catalog:
+            continue
+        product_tokens.append(token_clean)
+        if len(product_tokens) >= 4:
+            break
+    product = " ".join(product_tokens) or normalize_import_title_text(stem or Path(file_path).stem or "Document")
+
+    topic = "Technical Overview"
+    source_lower = f"{short_summary} {long_summary} {stem} {file_path}".lower()
+    if "faq" in source_lower:
+        topic = "FAQ Guidance"
+    elif "excursion" in source_lower:
+        topic = "Temperature Excursion Stability"
+    elif "shelf life" in source_lower:
+        topic = "Shelf Life Guidance"
+    elif "reconstitut" in source_lower:
+        topic = "Reconstitution Stability"
+    elif "shipping" in source_lower:
+        topic = "Shipping Guidance"
+    elif "protocol" in source_lower:
+        topic = "Protocol"
+    elif "specification" in source_lower or "formulation" in source_lower:
+        topic = "Formulation Specifications"
+    elif "validation" in source_lower:
+        topic = "Validation Overview"
+    elif "lineage" in source_lower:
+        topic = "Lineage Record"
+    elif "compliance" in source_lower:
+        topic = "Compliance Guidance"
+
+    title_parts = [product]
+    if catalog and catalog not in product.split():
+        title_parts.append(catalog)
+    title_parts.append(topic)
+    return normalize_import_title_text(" ".join(p for p in title_parts if p), file_name=file_name)
+
+
 def _normalized_category_path_components(file_name: str = "", file_path: str = "") -> List[str]:
     raw_parts: List[str] = []
     if file_path:
@@ -2110,6 +2223,7 @@ def build_fallback_document_summary(
     return {
         "long_summary": long_summary,
         "short_summary": short_summary,
+        "normalized_title": build_fallback_import_title(file_name, file_path, short_summary, long_summary),
         "category": _infer_category_from_text(text, categories, file_name=file_name, file_path=file_path),
         "tags": _extract_top_tags(text, MAX_TAGS),
     }
@@ -2464,8 +2578,8 @@ def classify_article_type_by_content(
 
 
 def attachment_path_for_doc(file_name: str, file_path: str) -> str:
-    ext = Path(file_name or file_path or "").suffix.lower().lstrip(".")
-    return f"attachments/{ext or 'file'}"
+    actual_name = Path(file_name or file_path or "attachment").name
+    return f"./{actual_name}"
 
 
 def write_import_excel(
@@ -3062,7 +3176,7 @@ def summarize_document(
     if UNREADABLE_CATEGORY not in categories_list:
         categories_list.append(UNREADABLE_CATEGORY)
     if len(text) <= MAX_CHARS_PER_CHUNK:
-        summary = summarize_with_model(cfg, text, categories_list)
+        summary = summarize_with_model(cfg, text, categories_list, file_name=file_name, file_path=file_path)
         summary["category"] = _infer_category_from_text(
             text,
             categories_list,
@@ -3076,7 +3190,7 @@ def summarize_document(
         chunk_summary = summarize_chunk(cfg, chunk)
         chunk_summaries.append(chunk_summary)
     combined = "\n".join(chunk_summaries)
-    summary = summarize_with_model(cfg, combined, categories_list)
+    summary = summarize_with_model(cfg, combined, categories_list, file_name=file_name, file_path=file_path)
     summary["category"] = _infer_category_from_text(
         text,
         categories_list,
@@ -3100,7 +3214,45 @@ def summarize_chunk(cfg: AzureConfig, text: str) -> str:
     return call_azure_chat(cfg, messages)
 
 
-def summarize_with_model(cfg: AzureConfig, text: str, categories: List[str]) -> Dict[str, Any]:
+def generate_normalized_import_title(
+    cfg: AzureConfig,
+    text: str,
+    file_name: str,
+    file_path: str,
+    short_summary: str,
+    long_summary: str,
+) -> str:
+    messages = [
+        {"role": "system", "content": "You generate normalized knowledge base titles. Output JSON only."},
+        {
+            "role": "user",
+            "content": (
+                "Generate JSON with key normalized_title.\n"
+                "Rules:\n"
+                "- Rewrite the title completely; do not preserve original phrasing.\n"
+                "- No punctuation or special characters.\n"
+                "- Do not phrase it as a question.\n"
+                "- Exact structure: ProductName CatalogNumber SummarizedTopic.\n"
+                "- Product name must appear first and use official capitalization and acronyms.\n"
+                "- Catalog number must appear immediately after the product name when present.\n"
+                "- If there is no catalog number, omit it.\n"
+                "- The topic must be a short declarative phrase, not a question.\n"
+                "- Preserve scientific acronyms and mixed-case terms like qPCR DNA RNA.\n"
+                "- Keep it short, consistent, and uniform.\n\n"
+                f"File name: {file_name}\n"
+                f"File path: {file_path}\n"
+                f"Short summary: {short_summary}\n"
+                f"Long summary: {long_summary}\n"
+                f"Document excerpt:\n{_title_source_excerpt(text)}"
+            ),
+        },
+    ]
+    content = call_azure_chat(cfg, messages, temperature=0.0)
+    data = extract_json(content)
+    return normalize_import_title_text(str(data.get("normalized_title", "") or ""), file_name=file_name)
+
+
+def summarize_with_model(cfg: AzureConfig, text: str, categories: List[str], file_name: str = "", file_path: str = "") -> Dict[str, Any]:
     categories_str = ", ".join(categories)
     messages = [
         {"role": "system", "content": "You are an expert analyst. Output JSON only."},
@@ -3109,19 +3261,25 @@ def summarize_with_model(cfg: AzureConfig, text: str, categories: List[str]) -> 
             "content": (
                 "Given the document text, produce JSON with keys: "
                 "long_summary (5-7 sentences), short_summary (1-2 sentences), "
+                "normalized_title (a normalized non-question title using the exact structure "
+                "ProductName CatalogNumber SummarizedTopic with no punctuation), "
                 "category (one of the provided categories), tags (array of strings). "
                 "Tags can be as many as needed but should be specific and not redundant. "
                 "If multiple categories could apply, prefer the most specific product/application "
                 "category over broad process or issue buckets (e.g., prefer 'SeqStudio' over "
                 "'Troubleshooting' when both fit). "
-                f"Categories: {categories_str}.\n\n"
+                f"Categories: {categories_str}.\n"
+                f"File name: {file_name}.\n"
+                f"File path: {file_path}.\n\n"
                 f"Document:\n{text}"
             ),
         },
     ]
     # Keep category + summary selection deterministic across runs.
     content = call_azure_chat(cfg, messages, temperature=0.0)
-    return extract_json(content)
+    data = extract_json(content)
+    data["normalized_title"] = normalize_import_title_text(str(data.get("normalized_title", "") or ""), file_name=file_name)
+    return data
 
 
 def summarize_article(cfg: AzureConfig, text: str) -> str:
@@ -4423,8 +4581,14 @@ def write_excels(
         if d.category == UNREADABLE_CATEGORY:
             continue
         content_text = text_by_doc_id.get(d.doc_id, "")
-        title = d.short_summary or d.file_name
-        article_type = classify_article_type_by_content(d.file_name, title, d.short_summary, d.long_summary, content_text)
+        title = d.normalized_title or d.short_summary or d.file_name
+        article_type = classify_article_type_by_content(
+            d.file_name,
+            d.short_summary or title,
+            d.short_summary,
+            d.long_summary,
+            content_text,
+        )
         base_path = resolve_category_path(category_path_map, app_name, d.category)
         import_rows.append(
             {
@@ -5120,6 +5284,27 @@ def run_pipeline(
 
         short_summary = (summary.get("short_summary") or "").strip()
         long_summary = (summary.get("long_summary") or "").strip()
+        normalized_title = normalize_import_title_text(
+            str(summary.get("normalized_title", "") or ""),
+            file_name=path.name,
+        )
+        if not normalized_title:
+            if not dry_run and text.strip() and not low_text:
+                try:
+                    normalized_title = generate_normalized_import_title(
+                        cfg,
+                        text,
+                        path.name,
+                        display_path,
+                        short_summary,
+                        long_summary,
+                    )
+                    resume_files[key].setdefault("doc_summary", {})["normalized_title"] = normalized_title
+                except Exception as exc:
+                    logging.exception("Title generation failed for %s: %s", display_path, exc)
+                    normalized_title = build_fallback_import_title(path.name, display_path, short_summary, long_summary)
+            else:
+                normalized_title = build_fallback_import_title(path.name, display_path, short_summary, long_summary)
 
         duplicate_of = doc_dup_of.get(doc_id, "")
         duplicate_score = doc_dup_score.get(doc_id)
@@ -5148,6 +5333,7 @@ def run_pipeline(
                 category=category,
                 tags=tags,
                 short_summary=short_summary,
+                normalized_title=normalized_title,
                 long_summary=long_summary,
                 word_count=len(text.split()),
                 char_count=len(text),
@@ -5713,6 +5899,27 @@ def run_pipeline_parallel(
 
         short_summary = (summary.get("short_summary") or "").strip()
         long_summary = (summary.get("long_summary") or "").strip()
+        normalized_title = normalize_import_title_text(
+            str(summary.get("normalized_title", "") or ""),
+            file_name=path.name,
+        )
+        if not normalized_title:
+            if not dry_run and text.strip() and not low_text:
+                try:
+                    normalized_title = generate_normalized_import_title(
+                        cfg,
+                        text,
+                        path.name,
+                        display_path,
+                        short_summary,
+                        long_summary,
+                    )
+                    resume_files[key].setdefault("doc_summary", {})["normalized_title"] = normalized_title
+                except Exception as exc:
+                    logging.exception("Title generation failed for %s: %s", display_path, exc)
+                    normalized_title = build_fallback_import_title(path.name, display_path, short_summary, long_summary)
+            else:
+                normalized_title = build_fallback_import_title(path.name, display_path, short_summary, long_summary)
 
         duplicate_of = doc_dup_of.get(doc_id, "")
         duplicate_score = doc_dup_score.get(doc_id)
@@ -5740,6 +5947,7 @@ def run_pipeline_parallel(
                 category=category,
                 tags=tags,
                 short_summary=short_summary,
+                normalized_title=normalized_title,
                 long_summary=long_summary,
                 word_count=len(text.split()),
                 char_count=len(text),
