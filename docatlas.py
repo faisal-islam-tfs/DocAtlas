@@ -677,6 +677,39 @@ CATEGORY_PATH_COMPONENT_HINTS: Dict[str, List[Tuple[str, float]]] = {
         ("instrument hcs", 5.0),
         ("hcs", 4.6),
     ],
+    "bigfoot applications": [
+        ("bigfoot applicationns", 5.0),
+        ("bigfoot applications", 5.0),
+    ],
+    "attune nxt": [
+        ("attune instruments and applications", 2.2),
+        ("attune nxt", 5.0),
+    ],
+    "attune xenith": [
+        ("attune instruments and applications", 2.2),
+        ("attune xenith", 5.0),
+        ("atune xenith", 5.0),
+    ],
+    "flow cytometry general": [
+        ("flow cytometry general", 5.0),
+    ],
+    "flow cytometry fluorochromes and spectra": [
+        ("flow cytometry fluorochromes and spectra", 5.0),
+    ],
+    "procartaplex protein assays": [
+        ("procartaplex protein assays", 5.0),
+    ],
+    "proquantum protein assays": [
+        ("proquantum protein assays", 5.0),
+    ],
+    "quantigene plex": [
+        ("quantigene branched dna assays", 2.2),
+        ("quantigene plex", 5.0),
+    ],
+    "quantigene singleplex": [
+        ("quantigene branched dna assays", 2.2),
+        ("quantigene singleplex", 5.0),
+    ],
     "liquid cell culture": [
         ("cell culture media", 2.2),
         ("liquid media", 5.0),

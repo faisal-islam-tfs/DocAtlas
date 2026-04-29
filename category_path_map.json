@@ -146,7 +146,6 @@
     "ELISA Validated Antibodies": "/Life_Sciences/Life_Science_Applications/FlowPlex/FlowPlex_Antibody_and_Immunoassays/ELISA/ELISA_Validated_Antibodies",
     "Matched Antibody Pairs": "/Life_Sciences/Life_Science_Applications/FlowPlex/FlowPlex_Antibody_and_Immunoassays/ELISA/Matched_Antibody_Pairs",
     "ProCartaPlex Protein Assays": "/Life_Sciences/Life_Science_Applications/FlowPlex/FlowPlex_Antibody_and_Immunoassays/ProCartaPlex_Protein_Assays",
-    "ProQuantum protein Assays": "/Life_Sciences/Life_Science_Applications/FlowPlex/FlowPlex_Antibody_and_Immunoassays/ProQuantum_protein_Assays",
     "QuantiGene Plex": "/Life_Sciences/Life_Science_Applications/FlowPlex/FlowPlex_Antibody_and_Immunoassays/QuantiGene_Branched_DNA_Assays/QuantiGene_Plex",
     "QuantiGene Singleplex": "/Life_Sciences/Life_Science_Applications/FlowPlex/FlowPlex_Antibody_and_Immunoassays/QuantiGene_Branched_DNA_Assays/QuantiGene_Singleplex",
     "Bigfoot Applications": "/Life_Sciences/Life_Science_Applications/FlowPlex/Flow_Cytometry_and_Cell_Sorting/Cell_Sorters/Bigfoot_Applications",
@@ -154,7 +153,6 @@
     "Attune Accessories": "/Life_Sciences/Life_Science_Applications/FlowPlex/Flow_Cytometry_and_Cell_Sorting/Flow_Cytometers/Attune_Instruments_and_Applications/Attune_Accessories",
     "Attune CytPix": "/Life_Sciences/Life_Science_Applications/FlowPlex/Flow_Cytometry_and_Cell_Sorting/Flow_Cytometers/Attune_Instruments_and_Applications/Attune_CytPix",
     "Attune NxT": "/Life_Sciences/Life_Science_Applications/FlowPlex/Flow_Cytometry_and_Cell_Sorting/Flow_Cytometers/Attune_Instruments_and_Applications/Attune_NxT",
-    "Atune Xenith": "/Life_Sciences/Life_Science_Applications/FlowPlex/Flow_Cytometry_and_Cell_Sorting/Flow_Cytometers/Attune_Instruments_and_Applications/Atune_Xenith",
     "Attune Software": "/Life_Sciences/Life_Science_Applications/FlowPlex/Flow_Cytometry_and_Cell_Sorting/Flow_Cytometers/Attune_Software",
     "Alignment Beads": "/Life_Sciences/Life_Science_Applications/FlowPlex/Flow_Cytometry_and_Cell_Sorting/Flow_Cytometry_Assays_and_Reagents/Flow_Cytometry_and_Cell_Soriting_Beads_and_Kits/Alignment_Beads",
     "Calibration Kits": "/Life_Sciences/Life_Science_Applications/FlowPlex/Flow_Cytometry_and_Cell_Sorting/Flow_Cytometry_Assays_and_Reagents/Flow_Cytometry_and_Cell_Soriting_Beads_and_Kits/Calibration_Kits",
@@ -171,7 +169,11 @@
     "PrimeFlow RNA Assay Kits": "/Life_Sciences/Life_Science_Applications/FlowPlex/Flow_Cytometry_and_Cell_Sorting/Flow_Cytometry_Assays_and_Reagents/PrimeFlow_RNA_Assay_Kits",
     "Flow Cytometry Antibodies": "/Life_Sciences/Life_Science_Applications/FlowPlex/Flow_Cytometry_and_Cell_Sorting/Flow_Cytometry_Antibodies",
     "Spectral Flow": "/Life_Sciences/Life_Science_Applications/FlowPlex/Flow_Cytometry_and_Cell_Sorting/Spectral_Flow",
-    "Luminex Instruments and Accessories": "/Life_Sciences/Life_Science_Applications/FlowPlex/Luminex_Instruments_and_Accessories"
+    "Luminex Instruments and Accessories": "/Life_Sciences/Life_Science_Applications/FlowPlex/Luminex_Instruments_and_Accessories",
+    "ProQuantum Protein Assays": "/Life_Sciences/Life_Science_Applications/FlowPlex/FlowPlex_Antibody_and_Immunoassays/ProQuantum_Protein_Assays",
+    "Attune Xenith": "/Life_Sciences/Life_Science_Applications/FlowPlex/Flow_Cytometry_and_Cell_Sorting/Flow_Cytometers/Attune_Instruments_and_Applications/Attune_Xenith",
+    "Flow Cytometry General": "/Life_Sciences/Life_Science_Applications/FlowPlex/Flow_Cytometry_and_Cell_Sorting/Flow_Cytometry_General",
+    "Flow Cytometry Fluorochromes and Spectra": "/Life_Sciences/Life_Science_Applications/FlowPlex/Flow_Cytometry_and_Cell_Sorting/Flow_Cytometry_Assays_and_Reagents/Flow_Cytometry_Fluorochromes_and_Spectra"
   },
   "Imaging Instruments": {
     "ArrayScan": "/Life_Sciences/Life_Science_Applications/Imaging_Instruments/ArrayScan",

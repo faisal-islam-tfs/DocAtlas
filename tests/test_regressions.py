@@ -492,6 +492,21 @@ class DocAtlasRegressionTests(unittest.TestCase):
         self.assertIn("Protein Assays", path_map["Protein Biology"])
         self.assertIn("Western Blotting", path_map["Protein Biology"])
 
+    def test_flowplex_config_includes_folder_priority_categories(self) -> None:
+        with open("applications.json", encoding="utf-8") as fh:
+            app_config = json.load(fh)["applications"]
+        with open("category_path_map.json", encoding="utf-8") as fh:
+            path_map = json.load(fh)
+
+        self.assertIn("Flow Cytometry General", app_config["FlowPlex"])
+        self.assertIn("Flow Cytometry Fluorochromes and Spectra", app_config["FlowPlex"])
+        self.assertIn("Attune Xenith", app_config["FlowPlex"])
+        self.assertIn("ProQuantum Protein Assays", app_config["FlowPlex"])
+        self.assertIn("Flow Cytometry General", path_map["FlowPlex"])
+        self.assertIn("Flow Cytometry Fluorochromes and Spectra", path_map["FlowPlex"])
+        self.assertIn("Attune Xenith", path_map["FlowPlex"])
+        self.assertIn("ProQuantum Protein Assays", path_map["FlowPlex"])
+
     def test_infer_category_uses_path_hints_for_gibco_docs(self) -> None:
         category = docatlas._infer_category_from_text(
             "Packaging specification and manufacturing label change guidance for Gibco product lines.",
@@ -527,6 +542,33 @@ class DocAtlasRegressionTests(unittest.TestCase):
             file_path="CELL ANALYSIS INSTRUMENTS and SOFTWARE/SOFTWARE - CELLESTE/CA EVOS Imaging Software Celleste - Release Notes/Celleste_Release_Notes.pdf",
         )
         self.assertEqual(category, "Celleste Image Analysis Software")
+
+    def test_infer_category_maps_flowplex_bigfoot_typo_folder(self) -> None:
+        category = docatlas._infer_category_from_text(
+            "Application notes and sorter workflows for the Bigfoot cell sorter.",
+            ["Bigfoot Applications", "Bigfoot Instruments and Accessories", "Other"],
+            file_name="Bigfoot workflow note.pdf",
+            file_path="FlowPlex/Flow Cytometry and Cell Sorting- CONFIDENTIAL/Cell Sorters/Bigfoot Applicationns/Bigfoot workflow note.pdf",
+        )
+        self.assertEqual(category, "Bigfoot Applications")
+
+    def test_infer_category_maps_flowplex_attune_xenith_folder(self) -> None:
+        category = docatlas._infer_category_from_text(
+            "Setup and application materials for the Attune Xenith system.",
+            ["Attune Xenith", "Attune CytPix", "Other"],
+            file_name="Attune Xenith setup.pdf",
+            file_path="FlowPlex/Flow Cytometry and Cell Sorting- CONFIDENTIAL/Flow Cytometers/Attune Instruments and Applications/Attune Xenith/Attune Xenith setup.pdf",
+        )
+        self.assertEqual(category, "Attune Xenith")
+
+    def test_infer_category_maps_flowplex_fluorochrome_folder(self) -> None:
+        category = docatlas._infer_category_from_text(
+            "Emission and excitation spectra for fluorochromes used in flow cytometry assays.",
+            ["Flow Cytometry Fluorochromes and Spectra", "Spectral Flow", "Other"],
+            file_name="eFluor spectra.pdf",
+            file_path="FlowPlex/Flow Cytometry and Cell Sorting- CONFIDENTIAL/Flow Cytometry Assays and Reagents/Flow Cytometry Fluorochromes and Spectra/eFluor spectra.pdf",
+        )
+        self.assertEqual(category, "Flow Cytometry Fluorochromes and Spectra")
 
     def test_infer_category_maps_hcs_folder_to_hcs(self) -> None:
         category = docatlas._infer_category_from_text(
