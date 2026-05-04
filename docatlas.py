@@ -151,6 +151,13 @@ DEFAULT_ESTIMATE_SEC_PER_FILE = 50.0
 DEFAULT_ESTIMATE_SEC_PER_MB = 1.5
 EMBEDDINGS_SOURCE_NONE = "none"
 UNREADABLE_CATEGORY = "Unreadable"
+READABLE_EXTRACTION_STATUSES = {
+    "ok",
+    "ocr_used",
+    "ocrmypdf_used",
+    "ocrmypdf_used_forced",
+    "ocrmypdf_failed_then_ocr_used",
+}
 SUMMARY_STOPWORDS = {
     "a",
     "an",
@@ -1908,8 +1915,15 @@ def is_content_filter_error(exc: Exception) -> bool:
     return (
         "content_filter" in msg
         or "responsibleaipolicyviolation" in msg
+        or "invalid_prompt" in msg
+        or "potentially violating our usage policy" in msg
         or ("chat api error 400" in msg and "filtered" in msg)
     )
+
+
+def has_readable_extraction(extraction_status: str, text: str) -> bool:
+    status = str(extraction_status or "").strip().lower()
+    return status in READABLE_EXTRACTION_STATUSES and len(str(text or "").strip()) >= MIN_EXTRACTED_CHARS
 
 
 def _summary_tokens(text: str) -> List[str]:
@@ -5272,7 +5286,7 @@ def run_pipeline(
         text = raw_texts.get(doc_id, "")
         cached = resume_files.get(key, {})
         extraction_status = extraction_statuses.get(doc_id, "no_text")
-        low_text = extraction_status != "ok" or len(text) < MIN_EXTRACTED_CHARS
+        low_text = not has_readable_extraction(extraction_status, text)
         if cached.get("doc_summary") and not dry_run:
             summary = cached.get("doc_summary", {})
         elif dry_run or not text.strip() or low_text:
@@ -5345,10 +5359,12 @@ def run_pipeline(
 
         moved_to = ""
         review_flags = []
-        if extraction_status != "ok":
+        if low_text:
             review_flags.append("low_text")
         if len(text) < MIN_EXTRACTED_CHARS:
             review_flags.append("short_text")
+        if extraction_status != "ok" and not low_text:
+            review_flags.append(extraction_status)
         summary_flags = doc_summary_flags.get(doc_id, set())
         if "summary_fallback_content_filter" in summary_flags:
             review_flags.append("summary_fallback_content_filter")
@@ -5853,7 +5869,7 @@ def run_pipeline_parallel(
         with state_lock:
             cached = resume_files.get(key, {})
         extraction_status = extraction_statuses.get(doc_id, "no_text")
-        low_text = extraction_status != "ok" or len(text) < MIN_EXTRACTED_CHARS
+        low_text = not has_readable_extraction(extraction_status, text)
         if cached.get("doc_summary") and not dry_run:
             summary = cached.get("doc_summary", {})
         elif dry_run or not text.strip() or low_text:
@@ -5908,7 +5924,7 @@ def run_pipeline_parallel(
         summary = summaries.get(doc_id, {})
         text = raw_texts.get(doc_id, "")
         extraction_status = extraction_statuses.get(doc_id, "no_text")
-        low_text = extraction_status != "ok" or len(text) < MIN_EXTRACTED_CHARS
+        low_text = not has_readable_extraction(extraction_status, text)
 
         category = (summary.get("category") or "uncategorized").strip()
         if low_text:
@@ -5959,10 +5975,12 @@ def run_pipeline_parallel(
         duplicate_group_id = doc_dup_group.get(doc_id, "")
 
         review_flags = []
-        if extraction_status != "ok":
+        if low_text:
             review_flags.append("low_text")
         if len(text) < MIN_EXTRACTED_CHARS:
             review_flags.append("short_text")
+        if extraction_status != "ok" and not low_text:
+            review_flags.append(extraction_status)
         summary_flags = doc_summary_flags.get(doc_id, set())
         if "summary_fallback_content_filter" in summary_flags:
             review_flags.append("summary_fallback_content_filter")

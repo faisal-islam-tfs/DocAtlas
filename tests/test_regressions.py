@@ -239,6 +239,50 @@ class DocAtlasRegressionTests(unittest.TestCase):
         self.assertTrue((docs_df["DuplicateOf"].fillna("") == "").all())
         self.assertTrue((docs_df["DupScore"].fillna(0.0) == 0.0).all())
 
+    def test_run_pipeline_imports_successful_ocr_documents_with_text(self) -> None:
+        root = self.make_tempdir()
+        input_dir = root / "input"
+        output_dir = root / "output"
+        input_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = input_dir / "ocr_good.pdf"
+        pdf_path.write_bytes(b"%PDF placeholder")
+        ocr_text = " ".join(["Flow cytometry antibody application content"] * 30)
+        summary = {
+            "long_summary": "Long OCR summary.",
+            "short_summary": "Short OCR summary.",
+            "normalized_title": "Flow Cytometry Antibody OCR Guidance",
+            "category": "Other",
+            "tags": ["ocr"],
+        }
+
+        with patch("docatlas.process_file", return_value=(ocr_text, [], "ocrmypdf_used")):
+            with patch("docatlas.summarize_document_safe", return_value=(summary, "")):
+                docatlas.run_pipeline(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    categories=["Other"],
+                    cfg=dummy_cfg(),
+                    dry_run=False,
+                    use_resume=False,
+                    ocrmypdf_enabled=True,
+                    app_name="TestApp",
+                    embeddings_source=docatlas.EMBEDDINGS_SOURCE_NONE,
+                    append_excel=False,
+                    category_path_map=self.category_path_map(),
+                    include_full_text_output=False,
+                    no_move=True,
+                    articles_enabled=False,
+                )
+        self.addCleanup(logging.shutdown)
+
+        docs_df = pd.read_excel(output_dir / "TestApp__docatlas_summaries.xlsx", sheet_name="Documents")
+        import_df = pd.read_excel(output_dir / "TestApp__docatlas_import.xlsx", sheet_name="import")
+        self.assertEqual(docs_df.loc[0, "Category"], "Other")
+        self.assertEqual(docs_df.loc[0, "ExtractionStatus"], "ocrmypdf_used")
+        self.assertIn("ocrmypdf_used", str(docs_df.loc[0, "ReviewFlag"]))
+        self.assertNotIn("low_text", str(docs_df.loc[0, "ReviewFlag"]))
+        self.assertEqual(len(import_df), 1)
+
     def test_weak_near_duplicate_edges_require_structural_signal(self) -> None:
         docs = [
             sample_doc("DOC-1", "k1", "nanodrop/enablement_final.pptx", category="CatA"),
@@ -370,6 +414,24 @@ class DocAtlasRegressionTests(unittest.TestCase):
         self.assertTrue(summary["long_summary"])
         self.assertEqual(summary["category"], "Other")
         self.assertTrue(summary["normalized_title"])
+
+    def test_invalid_prompt_summary_error_uses_local_fallback(self) -> None:
+        text = ("Flow cytometry antibody guidance " * 50).strip()
+        with patch(
+            "docatlas.summarize_document",
+            side_effect=RuntimeError("Chat API error 400: invalid_prompt potentially violating our usage policy"),
+        ):
+            summary, flag = docatlas.summarize_document_safe(
+                dummy_cfg(),
+                text,
+                ["Other"],
+                "policy.pdf",
+                "root/policy.pdf",
+            )
+
+        self.assertEqual(flag, "summary_fallback_content_filter")
+        self.assertTrue(summary["long_summary"])
+        self.assertEqual(summary["category"], "Other")
 
     def test_normalize_import_title_text_strips_punctuation_and_questions(self) -> None:
         title = docatlas.normalize_import_title_text(
