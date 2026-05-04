@@ -126,9 +126,15 @@ class DocAtlasRegressionTests(unittest.TestCase):
             }
         }
 
+    def reset_logging(self) -> None:
+        logging.shutdown()
+        root_logger = logging.getLogger()
+        for handler in list(root_logger.handlers):
+            root_logger.removeHandler(handler)
+
     def prepare_logging(self, out_dir: Path) -> None:
         docatlas.setup_logging(out_dir)
-        self.addCleanup(logging.shutdown)
+        self.addCleanup(self.reset_logging)
 
     def test_write_unsupported_cleanup_workbook_formats_and_sorts(self) -> None:
         output_dir = self.make_tempdir()
@@ -231,7 +237,7 @@ class DocAtlasRegressionTests(unittest.TestCase):
             no_move=True,
             articles_enabled=False,
         )
-        self.addCleanup(logging.shutdown)
+        self.addCleanup(self.reset_logging)
 
         docs_df = pd.read_excel(output_dir / "TestApp__docatlas_summaries.xlsx", sheet_name="Documents")
         self.assertEqual(len(docs_df), 2)
@@ -273,7 +279,7 @@ class DocAtlasRegressionTests(unittest.TestCase):
                     no_move=True,
                     articles_enabled=False,
                 )
-        self.addCleanup(logging.shutdown)
+        self.addCleanup(self.reset_logging)
 
         docs_df = pd.read_excel(output_dir / "TestApp__docatlas_summaries.xlsx", sheet_name="Documents")
         import_df = pd.read_excel(output_dir / "TestApp__docatlas_import.xlsx", sheet_name="import")
@@ -282,6 +288,65 @@ class DocAtlasRegressionTests(unittest.TestCase):
         self.assertIn("ocrmypdf_used", str(docs_df.loc[0, "ReviewFlag"]))
         self.assertNotIn("low_text", str(docs_df.loc[0, "ReviewFlag"]))
         self.assertEqual(len(import_df), 1)
+
+    def test_folder_path_category_overrides_summary_category(self) -> None:
+        root = self.make_tempdir()
+        input_dir = root / "input"
+        output_dir = root / "output"
+        source_dir = input_dir / "Nanodrop"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        pdf_path = source_dir / "instrument_overview.pdf"
+        pdf_path.write_bytes(b"%PDF placeholder")
+        text = " ".join(["Protein expression workflow content"] * 30)
+        summary = {
+            "long_summary": "Long summary.",
+            "short_summary": "Short summary.",
+            "normalized_title": "Protein Expression Workflow Overview",
+            "category": "Protein expression",
+            "tags": ["protein"],
+        }
+
+        with patch("docatlas.process_file", return_value=(text, [], "ok")):
+            with patch("docatlas.summarize_document_safe", return_value=(summary, "")):
+                docatlas.run_pipeline(
+                    input_dir=input_dir,
+                    output_dir=output_dir,
+                    categories=["Other", "Nanodrop", "Protein expression"],
+                    cfg=dummy_cfg(),
+                    dry_run=False,
+                    use_resume=False,
+                    ocrmypdf_enabled=False,
+                    app_name="TestApp",
+                    embeddings_source=docatlas.EMBEDDINGS_SOURCE_NONE,
+                    append_excel=False,
+                    category_path_map=self.category_path_map(),
+                    include_full_text_output=False,
+                    no_move=True,
+                    articles_enabled=False,
+                )
+        self.addCleanup(self.reset_logging)
+
+        docs_df = pd.read_excel(output_dir / "TestApp__docatlas_summaries.xlsx", sheet_name="Documents")
+        import_df = pd.read_excel(output_dir / "TestApp__docatlas_import.xlsx", sheet_name="import")
+        self.assertEqual(docs_df.loc[0, "Category"], "Nanodrop")
+        self.assertEqual(docs_df.loc[0, "CategorySource"], docatlas.CATEGORY_SOURCE_FOLDER)
+        self.assertIn("/Nanodrop/", str(import_df.loc[0, "Path"]))
+
+    def test_folder_category_matching_handles_aliases_but_not_ambiguous_folders(self) -> None:
+        self.assertEqual(
+            docatlas.infer_category_from_source_path(
+                ["Celleste Image Analysis Software", "CA Microplate Readers and Washers"],
+                "SOFTWARE - CELLESTE/release_notes.pdf",
+            ),
+            "Celleste Image Analysis Software",
+        )
+        self.assertEqual(
+            docatlas.infer_category_from_source_path(
+                ["Cell Isolation", "Dissociation Reagents"],
+                "Cell culture reagents antibiotics and supplements/Cell Isolation and Dissociation reagents/protocol.pdf",
+            ),
+            "",
+        )
 
     def test_weak_near_duplicate_edges_require_structural_signal(self) -> None:
         docs = [
@@ -435,7 +500,7 @@ class DocAtlasRegressionTests(unittest.TestCase):
 
     def test_normalize_import_title_text_strips_punctuation_and_questions(self) -> None:
         title = docatlas.normalize_import_title_text(
-            "How does Expi293™ (A12345) improve yields?",
+            "How does Expi293â„¢ (A12345) improve yields?",
             file_name="Expi293_A12345.pdf",
         )
         self.assertEqual(title, "Expi293 A12345 Improve Yields")
@@ -450,7 +515,7 @@ class DocAtlasRegressionTests(unittest.TestCase):
             {
                 "long_summary": "Long summary.",
                 "short_summary": "Short summary.",
-                "normalized_title": "Can Expi293™ A12345 improve yields?",
+                "normalized_title": "Can Expi293â„¢ A12345 improve yields?",
                 "category": "Other",
                 "tags": ["yield"],
             }
@@ -910,8 +975,9 @@ class DocAtlasRegressionTests(unittest.TestCase):
         wb = load_workbook(peers_path, read_only=True, data_only=True)
         ws = wb["Documents"]
         rows = list(ws.iter_rows(values_only=True))
+        header = {name: idx for idx, name in enumerate(rows[0])}
         self.assertEqual(len(rows), 2)
-        self.assertEqual(rows[1][1], "sub/a.xlsx")
+        self.assertEqual(rows[1][header["FilePath"]], "sub/a.xlsx")
         wb.close()
 
         wb = load_workbook(import_path, read_only=True, data_only=True)
@@ -1018,7 +1084,7 @@ class DocAtlasRegressionTests(unittest.TestCase):
             no_move=True,
             articles_enabled=False,
         )
-        self.addCleanup(logging.shutdown)
+        self.addCleanup(self.reset_logging)
 
         peers_path = output_dir / "TestApp__docatlas_summaries.xlsx"
         wb = load_workbook(peers_path)
@@ -1067,7 +1133,7 @@ class DocAtlasRegressionTests(unittest.TestCase):
             no_move=True,
             articles_enabled=False,
         )
-        self.addCleanup(logging.shutdown)
+        self.addCleanup(self.reset_logging)
 
         peers_path = output_dir / "TestApp__docatlas_summaries.xlsx"
         wb = load_workbook(peers_path)
@@ -1153,7 +1219,7 @@ class DocAtlasRegressionTests(unittest.TestCase):
             no_move=True,
             articles_enabled=False,
         )
-        self.addCleanup(logging.shutdown)
+        self.addCleanup(self.reset_logging)
 
         self.assertFalse((output_dir / "TestApp__docatlas_summaries.xlsx").exists())
         summary_text = (output_dir / "summary_report.txt").read_text(encoding="utf-8")
@@ -1204,7 +1270,7 @@ class DocAtlasRegressionTests(unittest.TestCase):
             no_move=True,
             articles_enabled=False,
         )
-        self.addCleanup(logging.shutdown)
+        self.addCleanup(self.reset_logging)
 
         self.assertTrue((output_dir / "TestApp__docatlas_summaries.xlsx").exists())
         cleanup_df = pd.read_excel(output_dir / "unsupported_cleanup.xlsx", sheet_name="cleanup_queue")

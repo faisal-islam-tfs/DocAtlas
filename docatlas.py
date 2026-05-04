@@ -158,6 +158,10 @@ READABLE_EXTRACTION_STATUSES = {
     "ocrmypdf_used_forced",
     "ocrmypdf_failed_then_ocr_used",
 }
+CATEGORY_SOURCE_FOLDER = "folder_path"
+CATEGORY_SOURCE_SUMMARY = "summary"
+CATEGORY_SOURCE_UNREADABLE = "unreadable"
+CATEGORY_SOURCE_FALLBACK_OTHER = "fallback_other"
 SUMMARY_STOPWORDS = {
     "a",
     "an",
@@ -563,6 +567,36 @@ CATEGORY_GENERIC_TOKENS = {
     "expression",
     "snp",
     "genotyping",
+}
+
+SOURCE_FOLDER_NOISE_TOKENS = CATEGORY_GENERIC_TOKENS | {
+    "app",
+    "application",
+    "applications",
+    "archive",
+    "archives",
+    "content",
+    "copy",
+    "doc",
+    "docs",
+    "document",
+    "documents",
+    "file",
+    "files",
+    "final",
+    "folder",
+    "folders",
+    "kb",
+    "old",
+    "pdf",
+    "ppt",
+    "pptx",
+    "review",
+    "reviewed",
+    "source",
+    "word",
+    "xls",
+    "xlsx",
 }
 
 CATEGORY_REQUIRED_PHRASES: Dict[str, Tuple[str, ...]] = {
@@ -980,6 +1014,7 @@ class DocRecord:
     review_group_id: str
     duplicate_relation_type: str
     moved_to: str
+    category_source: str = ""
 
 
 @dataclass
@@ -2156,6 +2191,111 @@ def _normalized_category_path_components(file_name: str = "", file_path: str = "
     return normalized
 
 
+def _normalize_category_match_text(value: str) -> str:
+    value = re.sub(r"([a-z])([A-Z])", r"\1 \2", str(value or ""))
+    value = value.replace("&", " and ")
+    value = re.sub(r"[^A-Za-z0-9]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip().lower()
+
+
+def _category_match_tokens(value: str) -> List[str]:
+    return [tok for tok in _normalize_category_match_text(value).split() if tok]
+
+
+def _distinctive_category_tokens(value: str) -> set[str]:
+    return {
+        tok
+        for tok in _category_match_tokens(value)
+        if tok not in SUMMARY_STOPWORDS and tok not in SOURCE_FOLDER_NOISE_TOKENS
+    }
+
+
+def _source_folder_components(file_path: str) -> List[str]:
+    normalized = str(file_path or "").replace("\\", "/").strip("/")
+    if not normalized:
+        return []
+    parts = [part for part in re.split(r"[!/]+", normalized) if part]
+    if parts:
+        parts = parts[:-1]
+    components: List[str] = []
+    for part in parts:
+        stem = Path(part).stem if Path(part).suffix.lower() == ".zip" else part
+        comp = _normalize_category_match_text(stem)
+        if comp:
+            components.append(comp)
+    return components
+
+
+def infer_category_from_source_path(categories: List[str], file_path: str) -> str:
+    """
+    Resolve a category from curated source folders only when the match is clear.
+
+    This intentionally avoids broad fuzzy matching: exact category names, tuned
+    path aliases, or unique distinctive-token matches can win. Ambiguous folders
+    such as "Antibodies" or "Cell Isolation and Dissociation reagents" fall back
+    to content classification.
+    """
+    components = _source_folder_components(file_path)
+    if not components:
+        return ""
+    candidates = [c for c in categories if c and c not in ("Other", UNREADABLE_CATEGORY)]
+    if not candidates:
+        return ""
+
+    scored: List[Tuple[float, int, str]] = []
+    for idx, cat in enumerate(candidates):
+        cat_norm = _normalize_category_match_text(cat)
+        cat_tokens = _distinctive_category_tokens(cat_norm)
+        aliases = {cat_norm, _normalize_category_match_text(sanitize_path_segment(cat))}
+        aliases.update(
+            _normalize_category_match_text(alias)
+            for alias, weight in CATEGORY_PATH_COMPONENT_HINTS.get(cat_norm, [])
+            if weight >= 4.0
+        )
+        aliases = {alias for alias in aliases if alias}
+        score = 0.0
+        for comp in components:
+            comp_tokens = _distinctive_category_tokens(comp)
+            if comp in aliases:
+                score = max(score, 100.0)
+            elif any(alias and (alias in comp or comp in alias) for alias in aliases):
+                score = max(score, 90.0 + min(5.0, float(len(comp_tokens))))
+            elif comp_tokens and comp_tokens.issubset(cat_tokens):
+                score = max(score, 80.0 + min(10.0, float(len(comp_tokens))))
+            elif cat_tokens and cat_tokens.issubset(comp_tokens) and len(cat_tokens) >= 2:
+                score = max(score, 75.0 + min(10.0, float(len(cat_tokens))))
+        if score > 0:
+            scored.append((score, idx, cat))
+
+    if not scored:
+        return ""
+    scored.sort(key=lambda x: (-x[0], x[1]))
+    best_score, _best_idx, best_cat = scored[0]
+    tied = [cat for score, _idx, cat in scored if abs(score - best_score) < 0.001]
+    if len(tied) > 1:
+        return ""
+    return best_cat
+
+
+def resolve_document_category(
+    summary_category: str,
+    categories: List[str],
+    file_path: str,
+    low_text: bool,
+) -> Tuple[str, str]:
+    if low_text:
+        return UNREADABLE_CATEGORY, CATEGORY_SOURCE_UNREADABLE
+
+    folder_category = infer_category_from_source_path(categories, file_path)
+    if folder_category:
+        return folder_category, CATEGORY_SOURCE_FOLDER
+
+    category = (summary_category or "").strip()
+    if category in categories or category in ("Other", UNREADABLE_CATEGORY):
+        return category, CATEGORY_SOURCE_SUMMARY
+    return "Other", CATEGORY_SOURCE_FALLBACK_OTHER
+
+
 def _infer_category_from_text(
     text: str,
     categories: List[str],
@@ -2674,7 +2814,7 @@ def write_full_text_legacy_structure_note(out_dir: Path) -> Path:
         "Sheet:\n"
         "- FullText\n\n"
         "Typical columns:\n"
-        "- doc_id, file_key, category, short_summary, long_summary, tags,\n"
+        "- doc_id, file_key, category, category_source, short_summary, long_summary, tags,\n"
         "  word_count, char_count, extraction_status, review_flags,\n"
         "  full_text, full_text_parts_count, full_text_part_1..N,\n"
         "  moved_to, file_name, file_path\n\n"
@@ -4418,6 +4558,7 @@ def write_excels(
         docs_rows.append(
             {
                 "Category": d.category,
+                "CategorySource": d.category_source,
                 "FilePath": d.file_path,
                 "FileName": d.file_name,
                 "DuplicateOf": display_doc_ref(d.duplicate_of),
@@ -4443,6 +4584,7 @@ def write_excels(
             {
                 "ReviewGroupID": d.review_group_id,
                 "Category": d.category,
+                "CategorySource": d.category_source,
                 "FilePath": d.file_path,
                 "FileName": d.file_name,
                 "DuplicateRelationType": d.duplicate_relation_type,
@@ -4500,6 +4642,7 @@ def write_excels(
 
     docs_columns = [
         "Category",
+        "CategorySource",
         "FilePath",
         "FileName",
         "DuplicateOf",
@@ -4518,6 +4661,7 @@ def write_excels(
     dups_columns = [
         "ReviewGroupID",
         "Category",
+        "CategorySource",
         "FilePath",
         "FileName",
         "DuplicateRelationType",
@@ -4826,6 +4970,11 @@ def write_summary_report(
     no_text_docs = [d for d in docs if d.extraction_status != "ok"]
     ocr_docs = [d for d in docs if d.extraction_status.startswith("ocr") or "ocr" in d.extraction_status]
 
+    category_sources: Dict[str, int] = {}
+    for d in docs:
+        source = d.category_source or "unknown"
+        category_sources[source] = category_sources.get(source, 0) + 1
+
     word_counts = [d.word_count for d in docs if d.word_count is not None]
     char_counts = [d.char_count for d in docs if d.char_count is not None]
     avg_words = int(sum(word_counts) / len(word_counts)) if word_counts else 0
@@ -4856,6 +5005,11 @@ def write_summary_report(
     for k in sorted(categories.keys()):
         pct = (categories[k] / total_docs * 100) if total_docs else 0
         lines.append(f"- {k}: {categories[k]} ({pct:.1f}%)")
+    lines.append("")
+    lines.append("Category Source:")
+    for k in sorted(category_sources.keys()):
+        pct = (category_sources[k] / total_docs * 100) if total_docs else 0
+        lines.append(f"- {k}: {category_sources[k]} ({pct:.1f}%)")
     lines.append("")
     lines.append("Documents by File Type:")
     for k in sorted(ext_counts.keys()):
@@ -5308,11 +5462,12 @@ def run_pipeline(
                 errors.append({"stage": "summarize", "file_name": path.name, "file_path": display_path, "error": str(exc)})
                 summary = {}
 
-        category = (summary.get("category") or "uncategorized").strip()
-        if low_text:
-            category = UNREADABLE_CATEGORY
-        if category not in categories and category not in ("Other", UNREADABLE_CATEGORY):
-            category = "Other"
+        category, category_source = resolve_document_category(
+            str(summary.get("category", "") or ""),
+            categories,
+            display_path,
+            low_text,
+        )
 
         tags = summary.get("tags") or []
         if isinstance(tags, str):
@@ -5380,6 +5535,7 @@ def run_pipeline(
                 source_path=str(path),
                 file_ext=path.suffix.lower(),
                 category=category,
+                category_source=category_source,
                 tags=tags,
                 short_summary=short_summary,
                 normalized_title=normalized_title,
@@ -5580,6 +5736,7 @@ def run_pipeline(
                 "file_name": d.file_name,
                 "file_path": d.file_path,
                 "category": d.category,
+                "category_source": d.category_source,
                 "short_summary": d.short_summary,
                 "long_summary": d.long_summary,
                 "tags": ", ".join(d.tags),
@@ -5926,11 +6083,12 @@ def run_pipeline_parallel(
         extraction_status = extraction_statuses.get(doc_id, "no_text")
         low_text = not has_readable_extraction(extraction_status, text)
 
-        category = (summary.get("category") or "uncategorized").strip()
-        if low_text:
-            category = UNREADABLE_CATEGORY
-        if category not in categories and category not in ("Other", UNREADABLE_CATEGORY):
-            category = "Other"
+        category, category_source = resolve_document_category(
+            str(summary.get("category", "") or ""),
+            categories,
+            display_path,
+            low_text,
+        )
 
         tags = summary.get("tags") or []
         if isinstance(tags, str):
@@ -5996,6 +6154,7 @@ def run_pipeline_parallel(
                 source_path=str(path),
                 file_ext=path.suffix.lower(),
                 category=category,
+                category_source=category_source,
                 tags=tags,
                 short_summary=short_summary,
                 normalized_title=normalized_title,
@@ -6181,6 +6340,7 @@ def run_pipeline_parallel(
                 "file_name": d.file_name,
                 "file_path": d.file_path,
                 "category": d.category,
+                "category_source": d.category_source,
                 "short_summary": d.short_summary,
                 "long_summary": d.long_summary,
                 "tags": ", ".join(d.tags),
